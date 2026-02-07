@@ -1,0 +1,97 @@
+// Prisma schema for Video Generator System
+// MariaDB + camelCase naming convention
+
+generator client {
+  provider = "prisma-client-js"
+}
+
+datasource db {
+  provider = "mysql"
+  url      = env("DATABASE_URL")
+}
+
+// Projects table
+model Project {
+  id            String   @id @default(uuid()) @db.Char(36)
+  projectName   String   @db.VarChar(100)  // camelCase storage name
+  displayName   String   @db.VarChar(255)  // User-facing name
+  description   String?  @db.Text
+  resolution    String   @default("512x512") @db.VarChar(20)
+  frameRate     Int      @default(8)
+  projectStatus String   @default("draft") @db.VarChar(50)  // draft, active, archived
+  createdAt     DateTime @default(now())
+  updatedAt     DateTime @updatedAt
+
+  clips Clip[]
+  jobs  Job[]
+
+  @@map("projects")
+}
+
+// Clips table
+model Clip {
+  id              String   @id @default(uuid()) @db.Char(36)
+  projectId       String   @db.Char(36)
+  clipName        String   @db.VarChar(255)
+  orderIndex      Int      @default(0)
+  prompt          String?  @db.Text
+  negativePrompt  String?  @db.Text
+  seedValue       BigInt?
+  stepsCount      Int      @default(20)
+  cfgScale        Float    @default(7.5)
+  referenceImage  String?  @db.VarChar(500)  // Reference image path
+  ipAdapterWeight Float?   @default(0.8)
+  filePath        String?  @db.VarChar(500)  // Video file full path
+  fileName        String?  @db.VarChar(255)  // Video file name
+  thumbnailPath   String?  @db.VarChar(500)  // Thumbnail full path
+  thumbnailName   String?  @db.VarChar(255)  // Thumbnail file name
+  durationSec     Float?
+  frameCount      Int?
+  clipStatus      String   @default("pending") @db.VarChar(50)  // pending, processing, completed, failed
+  createdAt       DateTime @default(now())
+  updatedAt       DateTime @updatedAt
+
+  project Project @relation(fields: [projectId], references: [id], onDelete: Cascade)
+
+  @@index([projectId])
+  @@index([orderIndex])
+  @@map("clips")
+}
+
+// Jobs table
+model Job {
+  id              String    @id @default(uuid()) @db.Char(36)
+  projectId       String    @db.Char(36)
+  jobType         String    @db.VarChar(50)  // generate, merge, upscale, interpolate, export
+  inputClipIds    Json?     // Array of clip IDs
+  jobSettings     Json?     // Job-specific settings
+  outputPath      String?   @db.VarChar(500)
+  outputFileName  String?   @db.VarChar(255)
+  progressPercent Int       @default(0) @db.TinyInt
+  jobStatus       String    @default("pending") @db.VarChar(50)  // pending, processing, completed, failed, cancelled
+  errorMessage    String?   @db.Text
+  startedAt       DateTime?
+  completedAt     DateTime?
+  createdAt       DateTime  @default(now())
+
+  project Project  @relation(fields: [projectId], references: [id], onDelete: Cascade)
+  logs    JobLog[]
+
+  @@index([projectId])
+  @@index([jobStatus])
+  @@map("jobs")
+}
+
+// Job Logs table
+model JobLog {
+  id         Int      @id @default(autoincrement())
+  jobId      String   @db.Char(36)
+  logLevel   String   @db.VarChar(20)  // info, warn, error, debug
+  logMessage String   @db.Text
+  createdAt  DateTime @default(now())
+
+  job Job @relation(fields: [jobId], references: [id], onDelete: Cascade)
+
+  @@index([jobId])
+  @@map("jobLogs")
+}

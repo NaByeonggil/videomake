@@ -1,0 +1,34 @@
+# ComfyUI (models, venv, outputs - too large for git)
+ComfyUI/
+
+# Storage (generated files)
+storage/
+
+# Node modules
+node_modules/
+
+# Next.js build
+.next/
+out/
+build/
+
+# Environment files
+.env
+.env*.local
+
+# OS files
+.DS_Store
+Thumbs.db
+
+# Debug logs
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+
+# TypeScript
+*.tsbuildinfo
+next-env.d.ts
+
+# Misc
+*.pem
+.vercel

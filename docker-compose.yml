@@ -1,0 +1,111 @@
+version: '3.8'
+
+services:
+  # MariaDB Database
+  mariadbServer:
+    image: mariadb:10.11
+    container_name: videoGenerator-mariadb
+    restart: unless-stopped
+    environment:
+      MYSQL_ROOT_PASSWORD: ${MYSQL_ROOT_PASSWORD:-rootpassword}
+      MYSQL_DATABASE: videoGeneratorDb
+      MYSQL_USER: ${MYSQL_USER:-videogen}
+      MYSQL_PASSWORD: ${MYSQL_PASSWORD:-videogenpass}
+    ports:
+      - "3306:3306"
+    volumes:
+      - mariadb_data:/var/lib/mysql
+      - ./init-db:/docker-entrypoint-initdb.d
+    command: >
+      --character-set-server=utf8mb4
+      --collation-server=utf8mb4_unicode_ci
+    networks:
+      - videogen-network
+    healthcheck:
+      test: ["CMD", "healthcheck.sh", "--connect", "--innodb_initialized"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Redis for BullMQ Job Queue
+  redisServer:
+    image: redis:7-alpine
+    container_name: videoGenerator-redis
+    restart: unless-stopped
+    ports:
+      - "6379:6379"
+    volumes:
+      - redis_data:/data
+    command: redis-server --appendonly yes --maxmemory 512mb --maxmemory-policy allkeys-lru
+    networks:
+      - videogen-network
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 10s
+      timeout: 5s
+      retries: 5
+
+  # Next.js Application
+  nextjsApp:
+    build:
+      context: ./videoGenerator
+      dockerfile: Dockerfile
+    container_name: videoGenerator-app
+    restart: unless-stopped
+    ports:
+      - "3000:3000"
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=mysql://videogen:videogenpass@mariadbServer:3306/videoGeneratorDb
+      - REDIS_URL=redis://redisServer:6379
+      - COMFYUI_URL=http://host.docker.internal:8188
+      - STORAGE_PATH=/app/storage
+    volumes:
+      - ./videoGenerator:/app
+      - /app/node_modules
+      - ./storage:/app/public/storage
+    depends_on:
+      mariadbServer:
+        condition: service_healthy
+      redisServer:
+        condition: service_healthy
+    networks:
+      - videogen-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+  # BullMQ Worker Process
+  workerProcess:
+    build:
+      context: ./videoGenerator
+      dockerfile: Dockerfile
+    container_name: videoGenerator-worker
+    restart: unless-stopped
+    command: npm run worker
+    environment:
+      - NODE_ENV=development
+      - DATABASE_URL=mysql://videogen:videogenpass@mariadbServer:3306/videoGeneratorDb
+      - REDIS_URL=redis://redisServer:6379
+      - COMFYUI_URL=http://host.docker.internal:8188
+      - STORAGE_PATH=/app/storage
+    volumes:
+      - ./videoGenerator:/app
+      - /app/node_modules
+      - ./storage:/app/public/storage
+    depends_on:
+      mariadbServer:
+        condition: service_healthy
+      redisServer:
+        condition: service_healthy
+    networks:
+      - videogen-network
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+
+networks:
+  videogen-network:
+    driver: bridge
+
+volumes:
+  mariadb_data:
+  redis_data:
