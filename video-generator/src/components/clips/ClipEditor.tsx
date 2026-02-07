@@ -209,6 +209,24 @@ export function ClipEditor() {
 
   useJobProgress(activeJobId, handleProgress, handleComplete, handleError);
 
+  const handleCancel = async () => {
+    if (!activeJobId) return;
+    try {
+      const res = await fetch(`${API_BASE}/jobs/${activeJobId}`, { method: 'DELETE' });
+      const json = await res.json();
+      if (json.success) {
+        setActiveJobId(null);
+        setIsGenerating(false);
+        setProgress(0);
+        setProgressMessage('');
+      } else {
+        alert(`Cancel failed: ${json.error}`);
+      }
+    } catch {
+      alert('Failed to cancel job');
+    }
+  };
+
   const handleGenerate = async () => {
     if (!currentProjectId || !prompt.trim()) return;
 
@@ -329,9 +347,9 @@ export function ClipEditor() {
           </select>
           <p className="text-xs text-gray-500 mt-1">
             {videoModel === 'animateDiff' && '✓ 설치됨 - 12GB VRAM에서 안정적으로 동작'}
-            {videoModel === 'svd' && '⚠️ 설치 필요 - 이미지 기반 영상 생성에 최적화'}
-            {videoModel === 'cogVideoX' && '⚠️ 설치 필요 - 텍스트 프롬프트 이해력이 뛰어남'}
-            {videoModel === 'hunyuan' && '⚠️ 설치 필요 - 24GB+ VRAM 권장'}
+            {videoModel === 'svd' && '✓ 설치됨 - 이미지 기반 영상 생성에 최적화 (24s)'}
+            {videoModel === 'cogVideoX' && '✓ 설치됨 - 텍스트 프롬프트 이해력이 뛰어남 (43s)'}
+            {videoModel === 'hunyuan' && '✓ 설치됨 - 고품질 T2V (73s)'}
           </p>
         </div>
 
@@ -470,7 +488,7 @@ export function ClipEditor() {
           />
           {containsKorean(prompt) && (
             <p className="text-xs text-amber-600 mt-1">
-              ⚠️ 한글이 감지되었습니다. 생성 전 "한→영 번역" 버튼을 눌러주세요.
+              ⚠️ 한글이 감지되었습니다. 생성 전 &ldquo;한→영 번역&rdquo; 버튼을 눌러주세요.
             </p>
           )}
         </div>
@@ -573,16 +591,27 @@ export function ClipEditor() {
           </div>
         )}
 
-        <Button
-          type="button"
-          onClick={handleGenerate}
-          className="w-full"
-          size="lg"
-          isLoading={generateClip.isPending || isGenerating}
-          disabled={!prompt.trim() || isGenerating}
-        >
-          {isGenerating ? 'Generating...' : 'Generate Clip'}
-        </Button>
+        {isGenerating ? (
+          <Button
+            type="button"
+            onClick={handleCancel}
+            className="w-full bg-red-600 hover:bg-red-700"
+            size="lg"
+          >
+            Cancel Generation
+          </Button>
+        ) : (
+          <Button
+            type="button"
+            onClick={handleGenerate}
+            className="w-full"
+            size="lg"
+            isLoading={generateClip.isPending}
+            disabled={!prompt.trim()}
+          >
+            Generate Clip
+          </Button>
+        )}
       </div>
     </div>
   );

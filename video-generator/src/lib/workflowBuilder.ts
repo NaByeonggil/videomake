@@ -47,22 +47,22 @@ export const MODEL_CONFIG: Record<VideoModel, {
   svd: {
     name: 'Stable Video Diffusion',
     minVram: 12,
-    installed: false, // Need to install
-    checkpoint: 'svd_xt_1_1.safetensors',
+    installed: true,
+    checkpoint: 'svd_xt.safetensors',
     supportsTxt2Vid: false,
     supportsImg2Vid: true,
   },
   cogVideoX: {
     name: 'CogVideoX',
-    minVram: 16,
-    installed: false,
+    minVram: 12,
+    installed: true,
     supportsTxt2Vid: true,
     supportsImg2Vid: true,
   },
   hunyuan: {
     name: 'HunyuanVideo',
-    minVram: 24,
-    installed: false,
+    minVram: 12,
+    installed: true,
     supportsTxt2Vid: true,
     supportsImg2Vid: true,
   },
@@ -411,7 +411,7 @@ export function getOutputVideoFromResult(
 
 /**
  * Build SVD (Stable Video Diffusion) Image-to-Video workflow
- * Note: Requires svd_xt_1_1.safetensors model
+ * Note: Requires svd_xt.safetensors model
  */
 export function buildSVDWorkflow(params: ImageToVideoParams): Record<string, unknown> {
   resetNodeIds();
@@ -434,7 +434,7 @@ export function buildSVDWorkflow(params: ImageToVideoParams): Record<string, unk
   workflow[checkpointNodeId] = {
     class_type: 'ImageOnlyCheckpointLoader',
     inputs: {
-      ckpt_name: 'svd_xt_1_1.safetensors',
+      ckpt_name: 'svd_xt.safetensors',
     },
   };
 
@@ -531,7 +531,7 @@ export function getModelRequirements(model: VideoModel): string {
   switch (model) {
     case 'svd':
       return `${config.name} requires:\n` +
-        '1. Download svd_xt_1_1.safetensors from HuggingFace\n' +
+        '1. Download svd_xt.safetensors from HuggingFace\n' +
         '2. Place in ComfyUI/models/checkpoints/\n' +
         '3. Requires 12GB+ VRAM';
     case 'cogVideoX':

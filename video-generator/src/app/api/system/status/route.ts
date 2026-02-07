@@ -85,19 +85,23 @@ interface StorageInfo {
 
 function getStorageInfo(): StorageInfo | null {
   try {
-    const output = execSync("df -h / --output=size,used,avail,pcent | tail -1", {
+    // BusyBox (Alpine) compatible: df -h /
+    // Output: Filesystem  Size  Used  Available  Use%  Mounted on
+    const output = execSync("df -h /", {
       timeout: 3000,
       encoding: 'utf-8',
     }).trim();
 
-    const parts = output.split(/\s+/).map((s) => s.trim());
-    if (parts.length < 4) return null;
+    const lines = output.split('\n');
+    if (lines.length < 2) return null;
+    const parts = lines[1].split(/\s+/);
+    if (parts.length < 5) return null;
 
     return {
-      total: parts[0],
-      used: parts[1],
-      available: parts[2],
-      percent: parseInt(parts[3].replace('%', ''), 10),
+      total: parts[1],
+      used: parts[2],
+      available: parts[3],
+      percent: parseInt(parts[4].replace('%', ''), 10),
     };
   } catch {
     return null;
@@ -121,6 +125,10 @@ function getMemoryInfo(): MemoryInfo {
 }
 
 function getNetworkIp(): string {
+  // Use HOST_IP env var if set (Docker)
+  if (process.env.HOST_IP) return process.env.HOST_IP;
+
+  // Fallback: first non-loopback, non-docker IPv4
   const interfaces = os.networkInterfaces();
   for (const [name, addrs] of Object.entries(interfaces)) {
     if (!addrs || name === 'lo') continue;
