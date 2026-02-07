@@ -57,7 +57,7 @@ services:
       - DATABASE_URL=mysql://videogen:videogenpass@mariadb:3306/videoGeneratorDb
       - REDIS_URL=redis://redis:6379
       - COMFYUI_URL=http://host.docker.internal:8188
-      - STORAGE_PATH=/app/storage
+      - STORAGE_PATH=./public/storage
       - HOST_IP=${HOST_IP:-}
       - COMFYUI_INPUT_PATH=/comfyui-input
     volumes:
@@ -95,7 +95,7 @@ services:
       - DATABASE_URL=mysql://videogen:videogenpass@mariadb:3306/videoGeneratorDb
       - REDIS_URL=redis://redis:6379
       - COMFYUI_URL=http://host.docker.internal:8188
-      - STORAGE_PATH=/app/storage
+      - STORAGE_PATH=./public/storage
     volumes:
       - ./video-generator:/app
       - /app/node_modules
