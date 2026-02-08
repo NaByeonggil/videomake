@@ -26,9 +26,15 @@ export async function GET(request: NextRequest) {
       },
     });
 
+    // Convert BigInt fields to strings for JSON serialization
+    const serializable = clips.map((clip) => ({
+      ...clip,
+      seedValue: clip.seedValue !== null ? clip.seedValue.toString() : null,
+    }));
+
     return NextResponse.json({
       success: true,
-      data: clips,
+      data: serializable,
     });
   } catch (error) {
     console.error('Error fetching clips:', error);

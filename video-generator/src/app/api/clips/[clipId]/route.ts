@@ -42,7 +42,10 @@ export async function GET(
 
     return NextResponse.json({
       success: true,
-      data: clip,
+      data: {
+        ...clip,
+        seedValue: clip.seedValue !== null ? clip.seedValue.toString() : null,
+      },
     });
   } catch (error) {
     console.error('Error fetching clip:', error);
