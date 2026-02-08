@@ -51,6 +51,7 @@ function getActualResolution(
 const MODEL_RESOLUTIONS: Record<string, Array<{ label: string; width: number; height: number; desc: string }>> = {
   wan21: [
     { label: '1024', width: 1024, height: 576, desc: '고화질 (느림, VRAM 많음)' },
+    { label: '960', width: 960, height: 540, desc: 'HQ→Full HD (1920x1080)' },
     { label: '720', width: 720, height: 400, desc: '중간 품질' },
     { label: '640', width: 640, height: 360, desc: '기본 (권장)' },
     { label: '480', width: 480, height: 272, desc: '빠른 생성 (저화질)' },
