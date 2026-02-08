@@ -14,6 +14,8 @@ import {
   buildTextToVideoWorkflow,
   buildImageToVideoWorkflow,
   buildSVDWorkflow,
+  buildWan21Workflow,
+  buildWan21I2VWorkflow,
   parseResolution,
   getOutputVideoFromResult,
   MODEL_CONFIG,
@@ -162,30 +164,73 @@ async function processGenerateJob(job: Job<GenerateJobData>): Promise<void> {
     // Build workflow based on video model and generation type
     let workflow: Record<string, unknown>;
 
-    if (videoModel === 'svd' && clip.referenceImage) {
+    if (videoModel === 'wan21' && settings.generationType === 'imageToVideo' && clip.referenceImage) {
+      // Wan2.1 1.3B Image to Video
+      // Image is resized to 480x320 inside the workflow (ImageScale node)
+      workflow = buildWan21I2VWorkflow({
+        prompt: clip.prompt || '',
+        negativePrompt: clip.negativePrompt || undefined,
+        width: 480,
+        height: 320,
+        steps: clip.stepsCount || 20,
+        cfg: 6.0,
+        seed: clip.seedValue ? Number(clip.seedValue) : undefined,
+        frameCount: (settings.frameCount as number) || 81,
+        fps: clip.project.frameRate || 16,
+        referenceImage: clip.referenceImage,
+        denoise: (settings.denoise as number) ?? 0.7,
+      });
+    } else if (videoModel === 'wan21') {
+      // Wan2.1 1.3B Text to Video
+      // 480x320 + 81 frames fits in 12GB VRAM
+      workflow = buildWan21Workflow({
+        prompt: clip.prompt || '',
+        negativePrompt: clip.negativePrompt || undefined,
+        width: 480,
+        height: 320,
+        steps: clip.stepsCount || 20,
+        cfg: 6.0,
+        seed: clip.seedValue ? Number(clip.seedValue) : undefined,
+        frameCount: (settings.frameCount as number) || 81,
+        fps: clip.project.frameRate || 16,
+      });
+    } else if (videoModel === 'svd' && clip.referenceImage) {
       // Stable Video Diffusion (Image to Video only)
+      // 768x512 + 14 frames fits in 12GB VRAM
       workflow = buildSVDWorkflow({
         prompt: clip.prompt || '',
         referenceImage: clip.referenceImage,
-        width: 1024,
-        height: 576,
-        steps: clip.stepsCount || 25,
-        cfg: 2.5, // SVD uses lower CFG
+        width: 768,
+        height: 512,
+        steps: clip.stepsCount || 20,
+        cfg: 2.5,
         seed: clip.seedValue ? Number(clip.seedValue) : undefined,
-        frameCount: (settings.frameCount as number) || 25,
+        frameCount: Math.min((settings.frameCount as number) || 14, 14),
         fps: clip.project.frameRate,
       });
     } else if (settings.generationType === 'imageToVideo' && clip.referenceImage) {
       // AnimateDiff Image to Video
+      // Lower VRAM limit for I2V: IPAdapter + VAE Encode + RepeatLatentBatch use extra VRAM
+      const i2vFrames = (settings.frameCount as number) || 16;
+      let i2vWidth = width;
+      let i2vHeight = height;
+      const i2vPixels = i2vWidth * i2vHeight * i2vFrames;
+      const i2vMaxPixels = 512 * 512 * 16; // More conservative for I2V (IPAdapter overhead)
+      if (i2vPixels > i2vMaxPixels) {
+        const scale = Math.sqrt(i2vMaxPixels / i2vPixels);
+        i2vWidth = Math.floor((i2vWidth * scale) / 8) * 8;
+        i2vHeight = Math.floor((i2vHeight * scale) / 8) * 8;
+        console.log(`[GenerateWorker] AnimateDiff I2V VRAM limit: scaled ${width}x${height} → ${i2vWidth}x${i2vHeight} for ${i2vFrames} frames`);
+      }
       workflow = buildImageToVideoWorkflow({
         prompt: clip.prompt || '',
         negativePrompt: clip.negativePrompt || undefined,
-        width,
-        height,
+        width: i2vWidth,
+        height: i2vHeight,
         steps: clip.stepsCount,
         cfg: clip.cfgScale,
         seed: clip.seedValue ? Number(clip.seedValue) : undefined,
-        frameCount: (settings.frameCount as number) || 16,
+        frameCount: i2vFrames,
         fps: clip.project.frameRate,
         referenceImage: clip.referenceImage,
         ipAdapterWeight: clip.ipAdapterWeight || 1.0,
@@ -193,26 +238,52 @@ async function processGenerateJob(job: Job<GenerateJobData>): Promise<void> {
       });
     } else {
       // AnimateDiff Text to Video (default)
+      // Limit resolution for 12GB VRAM: max 512x512 for 16+ frames
+      const requestedFrames = (settings.frameCount as number) || 16;
+      let adWidth = width;
+      let adHeight = height;
+      const totalPixels = adWidth * adHeight * requestedFrames;
+      const maxPixels = 512 * 512 * 24; // Safe limit for 12GB VRAM
+      if (totalPixels > maxPixels) {
+        // Scale down resolution to fit VRAM
+        const scale = Math.sqrt(maxPixels / totalPixels);
+        adWidth = Math.floor((adWidth * scale) / 8) * 8; // Must be multiple of 8
+        adHeight = Math.floor((adHeight * scale) / 8) * 8;
+        console.log(`[GenerateWorker] AnimateDiff VRAM limit: scaled ${width}x${height} → ${adWidth}x${adHeight} for ${requestedFrames} frames`);
+      }
       workflow = buildTextToVideoWorkflow({
         prompt: clip.prompt || '',
         negativePrompt: clip.negativePrompt || undefined,
-        width,
-        height,
+        width: adWidth,
+        height: adHeight,
         steps: clip.stepsCount,
         cfg: clip.cfgScale,
         seed: clip.seedValue ? Number(clip.seedValue) : undefined,
-        frameCount: (settings.frameCount as number) || 16,
+        frameCount: requestedFrames,
         fps: clip.project.frameRate,
       });
     }
 
     await addJobLog(jobId, 'info', `Workflow built for ${modelConfig.name}, sending to ComfyUI`);
-    await publishProgress(jobId, { percent: 15, message: 'Sending to ComfyUI...' });
+    await publishProgress(jobId, { percent: 15, message: 'Freeing VRAM...' });
 
     // Check if ComfyUI is available
     const isAvailable = await comfyui.isAvailable();
     if (!isAvailable) {
       throw new Error('ComfyUI server is not available');
+    }
+
+    // Free VRAM before loading new models to prevent OOM
+    try {
+      const comfyuiUrl = process.env.COMFYUI_URL || 'http://localhost:8188';
+      await fetch(`${comfyuiUrl}/free`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ unload_models: true, free_memory: true }),
+      });
+      await addJobLog(jobId, 'info', 'VRAM freed before generation');
+    } catch {
+      await addJobLog(jobId, 'warn', 'Failed to free VRAM (non-fatal)');
     }
 
     // Execute workflow with progress monitoring

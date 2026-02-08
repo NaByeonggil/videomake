@@ -7,6 +7,7 @@
 import { useState } from 'react';
 import { useProjectStore, Clip } from '@/stores/projectStore';
 import { useClips, useDeleteClip } from '@/hooks/useClips';
+import { toStorageUrl } from '@/lib/fileNaming';
 import { Modal } from '@/components/common/Modal';
 
 interface VideoPlayerModalProps {
@@ -18,7 +19,7 @@ interface VideoPlayerModalProps {
 
 function VideoPlayerModal({ clip, onClose, onDelete, isDeleting }: VideoPlayerModalProps) {
   const videoUrl = clip.filePath
-    ? encodeURI(clip.filePath.replace('./public', ''))
+    ? toStorageUrl(clip.filePath)
     : null;
 
   return (
@@ -184,7 +185,7 @@ export function VideoGallery() {
     <div className="h-full overflow-auto p-6">
       <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-3 xl:grid-cols-4 gap-4">
         {completedClips.map((clip) => {
-          const videoUrl = clip.filePath ? encodeURI(clip.filePath.replace('./public', '')) : null;
+          const videoUrl = clip.filePath ? toStorageUrl(clip.filePath) : null;
 
           return (
             <div

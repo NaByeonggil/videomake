@@ -47,7 +47,7 @@ export function useGenerateClip() {
       ipAdapterWeight?: number;
       denoise?: number;
       generationType?: 'textToVideo' | 'imageToVideo';
-      videoModel?: 'animateDiff' | 'svd' | 'cogVideoX' | 'hunyuan';
+      videoModel?: 'animateDiff' | 'svd' | 'cogVideoX' | 'hunyuan' | 'wan21';
       frameCount?: number;
     }): Promise<{ clipId: string; jobId: string }> => {
       const res = await fetch(`${API_BASE}/clips/generateClip`, {

@@ -9,7 +9,7 @@ const generateClipSchema = z.object({
   projectId: z.string().uuid(),
   clipName: z.string().min(1).max(255).optional(),
   generationType: z.enum(['textToVideo', 'imageToVideo']).default('textToVideo'),
-  videoModel: z.enum(['animateDiff', 'svd', 'cogVideoX', 'hunyuan']).default('animateDiff'),
+  videoModel: z.enum(['animateDiff', 'svd', 'cogVideoX', 'hunyuan', 'wan21']).default('animateDiff'),
   prompt: z.string().min(1),
   negativePrompt: z.string().optional(),
   // Support both flat and nested formats
@@ -17,13 +17,13 @@ const generateClipSchema = z.object({
     stepsCount: z.number().int().min(10).max(50).default(20),
     cfgScale: z.number().min(1).max(20).default(7.5),
     seedValue: z.number().int().optional(),
-    frameCount: z.number().int().min(8).max(48).default(16),
+    frameCount: z.number().int().min(8).max(128).default(16),
   }).optional(),
   // Flat format (from frontend)
   stepsCount: z.number().int().min(10).max(50).optional(),
   cfgScale: z.number().min(1).max(20).optional(),
   seedValue: z.number().int().optional(),
-  frameCount: z.number().int().min(8).max(48).optional(),
+  frameCount: z.number().int().min(8).max(128).optional(),
   referenceImage: z.string().optional(),
   ipAdapterWeight: z.number().min(0).max(2).optional(),
   denoise: z.number().min(0).max(1).optional(), // 0=keep original, 1=full regeneration

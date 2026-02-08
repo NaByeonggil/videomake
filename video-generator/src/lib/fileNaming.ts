@@ -113,6 +113,32 @@ export function getStoragePathById(projectId: string, subfolder: string): string
 }
 
 /**
+ * Convert a storage file path to a URL accessible from the browser
+ */
+export function toStorageUrl(filePath: string): string {
+  // Legacy: ./public/storage/... → /storage/...
+  if (filePath.startsWith('./public')) {
+    return encodeURI(filePath.replace('./public', ''));
+  }
+
+  // Absolute path (e.g. /mnt/storage/clips/...) → extract relative part after base dir
+  if (filePath.startsWith('/')) {
+    // Find the first known subfolder to extract relative path
+    const folders = ['clips', 'thumbnails', 'referenceImages', 'processing', 'exports'];
+    for (const folder of folders) {
+      const idx = filePath.indexOf(`/${folder}/`);
+      if (idx !== -1) {
+        return encodeURI(`/api/storage${filePath.slice(idx)}`);
+      }
+    }
+    // Fallback for absolute paths
+    return encodeURI(`/api/storage/${filePath.split('/').slice(-2).join('/')}`);
+  }
+
+  return encodeURI(`/api/storage/${filePath}`);
+}
+
+/**
  * Parse file name to extract components
  */
 export function parseFileName(fileName: string): {

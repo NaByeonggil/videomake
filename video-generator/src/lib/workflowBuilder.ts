@@ -3,7 +3,7 @@
  * Generates workflow JSON for various video generation models
  */
 
-export type VideoModel = 'animateDiff' | 'svd' | 'cogVideoX' | 'hunyuan';
+export type VideoModel = 'animateDiff' | 'svd' | 'cogVideoX' | 'hunyuan' | 'wan21';
 
 export interface TextToVideoParams {
   prompt: string;
@@ -61,6 +61,13 @@ export const MODEL_CONFIG: Record<VideoModel, {
   },
   hunyuan: {
     name: 'HunyuanVideo',
+    minVram: 12,
+    installed: true,
+    supportsTxt2Vid: true,
+    supportsImg2Vid: true,
+  },
+  wan21: {
+    name: 'Wan2.1 (1.3B)',
     minVram: 12,
     installed: true,
     supportsTxt2Vid: true,
@@ -511,6 +518,295 @@ export function buildSVDWorkflow(params: ImageToVideoParams): Record<string, unk
 }
 
 /**
+ * Build Wan2.1 Text-to-Video workflow
+ * Uses UNETLoader + CLIPLoader(umt5_xxl) + wan_2.1_vae
+ * Frames must follow 4k+1 rule (e.g. 33, 49, 65, 81)
+ */
+export function buildWan21Workflow(params: TextToVideoParams): Record<string, unknown> {
+  resetNodeIds();
+
+  const {
+    prompt,
+    negativePrompt = 'blurry, low quality, distorted, deformed',
+    width = 480,
+    height = 320,
+    steps = 20,
+    cfg = 6.0,
+    seed = Math.floor(Math.random() * 2147483647),
+    frameCount = 81,
+    fps = 16,
+  } = params;
+
+  const workflow: Record<string, unknown> = {};
+
+  // 1. CLIPLoader (UMT5-XXL for Wan2.1)
+  const clipLoaderId = getNodeId();
+  workflow[clipLoaderId] = {
+    class_type: 'CLIPLoader',
+    inputs: {
+      clip_name: 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
+      type: 'wan',
+    },
+  };
+
+  // 2. UNETLoader (Wan2.1 1.3B bf16)
+  const unetLoaderId = getNodeId();
+  workflow[unetLoaderId] = {
+    class_type: 'UNETLoader',
+    inputs: {
+      unet_name: 'wan2.1/wan2.1_t2v_1.3B_bf16.safetensors',
+      weight_dtype: 'default',
+    },
+  };
+
+  // 3. VAELoader (Wan2.1 VAE)
+  const vaeLoaderId = getNodeId();
+  workflow[vaeLoaderId] = {
+    class_type: 'VAELoader',
+    inputs: {
+      vae_name: 'wan_2.1_vae.safetensors',
+    },
+  };
+
+  // 4. CLIP Text Encode (Positive)
+  const positiveClipId = getNodeId();
+  workflow[positiveClipId] = {
+    class_type: 'CLIPTextEncode',
+    inputs: {
+      text: prompt,
+      clip: [clipLoaderId, 0],
+    },
+  };
+
+  // 5. CLIP Text Encode (Negative)
+  const negativeClipId = getNodeId();
+  workflow[negativeClipId] = {
+    class_type: 'CLIPTextEncode',
+    inputs: {
+      text: negativePrompt,
+      clip: [clipLoaderId, 0],
+    },
+  };
+
+  // 6. EmptySD3LatentImage (batch_size = frames)
+  const emptyLatentId = getNodeId();
+  workflow[emptyLatentId] = {
+    class_type: 'EmptySD3LatentImage',
+    inputs: {
+      width,
+      height,
+      batch_size: frameCount,
+    },
+  };
+
+  // 7. KSampler
+  const samplerId = getNodeId();
+  workflow[samplerId] = {
+    class_type: 'KSampler',
+    inputs: {
+      model: [unetLoaderId, 0],
+      positive: [positiveClipId, 0],
+      negative: [negativeClipId, 0],
+      latent_image: [emptyLatentId, 0],
+      seed,
+      steps,
+      cfg,
+      sampler_name: 'euler',
+      scheduler: 'normal',
+      denoise: 1,
+    },
+  };
+
+  // 8. VAE Decode
+  const vaeDecodeId = getNodeId();
+  workflow[vaeDecodeId] = {
+    class_type: 'VAEDecode',
+    inputs: {
+      samples: [samplerId, 0],
+      vae: [vaeLoaderId, 0],
+    },
+  };
+
+  // 9. VHS Video Combine
+  const videoCombineId = getNodeId();
+  workflow[videoCombineId] = {
+    class_type: 'VHS_VideoCombine',
+    inputs: {
+      images: [vaeDecodeId, 0],
+      frame_rate: fps,
+      loop_count: 0,
+      filename_prefix: 'Wan21',
+      format: 'video/h264-mp4',
+      pingpong: false,
+      save_output: true,
+    },
+  };
+
+  return workflow;
+}
+
+/**
+ * Build Wan2.1 Image-to-Video workflow
+ * Loads reference image, resizes to generation resolution,
+ * VAE encodes to latent, repeats for frames, then denoises with KSampler
+ */
+export function buildWan21I2VWorkflow(params: ImageToVideoParams): Record<string, unknown> {
+  resetNodeIds();
+
+  const {
+    prompt,
+    negativePrompt = 'blurry, low quality, distorted, deformed',
+    width = 480,
+    height = 320,
+    steps = 20,
+    cfg = 6.0,
+    seed = Math.floor(Math.random() * 2147483647),
+    frameCount = 81,
+    fps = 16,
+    referenceImage,
+    denoise = 0.7,
+  } = params;
+
+  const workflow: Record<string, unknown> = {};
+
+  // 1. CLIPLoader (UMT5-XXL for Wan2.1)
+  const clipLoaderId = getNodeId();
+  workflow[clipLoaderId] = {
+    class_type: 'CLIPLoader',
+    inputs: {
+      clip_name: 'umt5_xxl_fp8_e4m3fn_scaled.safetensors',
+      type: 'wan',
+    },
+  };
+
+  // 2. UNETLoader (Wan2.1 1.3B bf16)
+  const unetLoaderId = getNodeId();
+  workflow[unetLoaderId] = {
+    class_type: 'UNETLoader',
+    inputs: {
+      unet_name: 'wan2.1/wan2.1_t2v_1.3B_bf16.safetensors',
+      weight_dtype: 'default',
+    },
+  };
+
+  // 3. VAELoader (Wan2.1 VAE)
+  const vaeLoaderId = getNodeId();
+  workflow[vaeLoaderId] = {
+    class_type: 'VAELoader',
+    inputs: {
+      vae_name: 'wan_2.1_vae.safetensors',
+    },
+  };
+
+  // 4. Load Reference Image
+  const loadImageId = getNodeId();
+  workflow[loadImageId] = {
+    class_type: 'LoadImage',
+    inputs: {
+      image: referenceImage,
+    },
+  };
+
+  // 5. Resize image to generation resolution
+  const imageScaleId = getNodeId();
+  workflow[imageScaleId] = {
+    class_type: 'ImageScale',
+    inputs: {
+      image: [loadImageId, 0],
+      upscale_method: 'lanczos',
+      width,
+      height,
+      crop: 'center',
+    },
+  };
+
+  // 6. VAE Encode image to latent
+  const vaeEncodeId = getNodeId();
+  workflow[vaeEncodeId] = {
+    class_type: 'VAEEncode',
+    inputs: {
+      pixels: [imageScaleId, 0],
+      vae: [vaeLoaderId, 0],
+    },
+  };
+
+  // 7. Repeat latent for all frames
+  const repeatLatentId = getNodeId();
+  workflow[repeatLatentId] = {
+    class_type: 'RepeatLatentBatch',
+    inputs: {
+      samples: [vaeEncodeId, 0],
+      amount: frameCount,
+    },
+  };
+
+  // 8. CLIP Text Encode (Positive)
+  const positiveClipId = getNodeId();
+  workflow[positiveClipId] = {
+    class_type: 'CLIPTextEncode',
+    inputs: {
+      text: prompt,
+      clip: [clipLoaderId, 0],
+    },
+  };
+
+  // 9. CLIP Text Encode (Negative)
+  const negativeClipId = getNodeId();
+  workflow[negativeClipId] = {
+    class_type: 'CLIPTextEncode',
+    inputs: {
+      text: negativePrompt,
+      clip: [clipLoaderId, 0],
+    },
+  };
+
+  // 10. KSampler - denoise < 1.0 preserves reference image
+  const samplerId = getNodeId();
+  workflow[samplerId] = {
+    class_type: 'KSampler',
+    inputs: {
+      model: [unetLoaderId, 0],
+      positive: [positiveClipId, 0],
+      negative: [negativeClipId, 0],
+      latent_image: [repeatLatentId, 0],
+      seed,
+      steps,
+      cfg,
+      sampler_name: 'euler',
+      scheduler: 'normal',
+      denoise,
+    },
+  };
+
+  // 11. VAE Decode
+  const vaeDecodeId = getNodeId();
+  workflow[vaeDecodeId] = {
+    class_type: 'VAEDecode',
+    inputs: {
+      samples: [samplerId, 0],
+      vae: [vaeLoaderId, 0],
+    },
+  };
+
+  // 12. VHS Video Combine
+  const videoCombineId = getNodeId();
+  workflow[videoCombineId] = {
+    class_type: 'VHS_VideoCombine',
+    inputs: {
+      images: [vaeDecodeId, 0],
+      frame_rate: fps,
+      loop_count: 0,
+      filename_prefix: 'Wan21_I2V',
+      format: 'video/h264-mp4',
+      pingpong: false,
+      save_output: true,
+    },
+  };
+
+  return workflow;
+}
+
+/**
  * Check if a video model is available
  */
 export function isModelAvailable(model: VideoModel): boolean {
@@ -544,6 +840,12 @@ export function getModelRequirements(model: VideoModel): string {
         '1. Install ComfyUI-HunyuanVideo custom node\n' +
         '2. Download HunyuanVideo model\n' +
         '3. Requires 24GB+ VRAM (or quantized version for 12GB)';
+    case 'wan21':
+      return `${config.name} requires:\n` +
+        '1. Download wan2.1_t2v_1.3B_bf16.safetensors\n' +
+        '2. Download umt5_xxl_fp8 text encoder\n' +
+        '3. Download wan_2.1_vae.safetensors\n' +
+        '4. Requires 12GB VRAM';
     default:
       return `${config.name} - Min VRAM: ${config.minVram}GB`;
   }

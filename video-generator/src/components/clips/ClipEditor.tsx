@@ -4,16 +4,55 @@
 
 'use client';
 
-import React, { useState, useCallback, useRef, useEffect } from 'react';
+import React, { useState, useCallback, useRef, useEffect, useMemo } from 'react';
 import { useGenerateClip } from '@/hooks/useClips';
 import { useJobProgress } from '@/hooks/useJobs';
 import { useProjectStore } from '@/stores/projectStore';
+import { useSystemStatus } from '@/hooks/useSystemStatus';
 import { Button } from '../common/Button';
+
+/**
+ * Calculate actual rendering resolution based on model, project resolution, and frame count.
+ * Mirrors the VRAM protection logic in generateWorker.ts
+ */
+function getActualResolution(
+  videoModel: string,
+  projectResolution: string,
+  frameCount: number,
+  generationType: string = 'textToVideo'
+): { width: number; height: number; scaled: boolean; originalWidth: number; originalHeight: number } {
+  const match = projectResolution.match(/(\d+)x(\d+)/);
+  const originalWidth = match ? parseInt(match[1], 10) : 512;
+  const originalHeight = match ? parseInt(match[2], 10) : 512;
+
+  if (videoModel === 'wan21') {
+    return { width: 480, height: 320, scaled: true, originalWidth, originalHeight };
+  }
+  if (videoModel === 'svd') {
+    return { width: 768, height: 512, scaled: originalWidth !== 768 || originalHeight !== 512, originalWidth, originalHeight };
+  }
+
+  // AnimateDiff: apply VRAM limit
+  // I2V uses more VRAM (IPAdapter + VAE Encode overhead)
+  let w = originalWidth;
+  let h = originalHeight;
+  const totalPixels = w * h * frameCount;
+  const maxPixels = generationType === 'imageToVideo' ? 512 * 512 * 16 : 512 * 512 * 24;
+  const scaled = totalPixels > maxPixels;
+  if (scaled) {
+    const scale = Math.sqrt(maxPixels / totalPixels);
+    w = Math.floor((w * scale) / 8) * 8;
+    h = Math.floor((h * scale) / 8) * 8;
+  }
+  return { width: w, height: h, scaled, originalWidth, originalHeight };
+}
 
 const API_BASE = '/api';
 
 export function ClipEditor() {
   const currentProjectId = useProjectStore((state) => state.currentProjectId);
+  const projects = useProjectStore((state) => state.projects);
+  const currentProject = projects.find((p) => p.id === currentProjectId);
   const generateClip = useGenerateClip();
 
   const [prompt, setPrompt] = useState('');
@@ -23,7 +62,7 @@ export function ClipEditor() {
   const [seed, setSeed] = useState<string>('');
   const [frameCount, setFrameCount] = useState(16);
   const [generationType, setGenerationType] = useState<'textToVideo' | 'imageToVideo'>('textToVideo');
-  const [videoModel, setVideoModel] = useState<'animateDiff' | 'svd' | 'cogVideoX' | 'hunyuan'>('animateDiff');
+  const [videoModel, setVideoModel] = useState<'animateDiff' | 'svd' | 'cogVideoX' | 'hunyuan' | 'wan21'>('animateDiff');
 
   // Image upload state
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
@@ -33,16 +72,21 @@ export function ClipEditor() {
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Translation state
-  const [isTranslating, setIsTranslating] = useState(false);
+  // Calculate actual rendering resolution
+  const resolution = useMemo(
+    () => getActualResolution(videoModel, currentProject?.resolution || '512x512', frameCount, generationType),
+    [videoModel, currentProject?.resolution, frameCount, generationType]
+  );
 
-  // Translate Korean to English using MyMemory API
+  // Korean translation helper
+  const containsKorean = (text: string): boolean => /[ㄱ-ㅎㅏ-ㅣ가-힣]/.test(text);
+
   const translateToEnglish = async (text: string): Promise<string> => {
     try {
-      const response = await fetch(
+      const res = await fetch(
         `https://api.mymemory.translated.net/get?q=${encodeURIComponent(text)}&langpair=ko|en`
       );
-      const data = await response.json();
+      const data = await res.json();
       if (data.responseStatus === 200 && data.responseData?.translatedText) {
         return data.responseData.translatedText;
       }
@@ -52,27 +96,36 @@ export function ClipEditor() {
     }
   };
 
-  // Check if text contains Korean characters
-  const containsKorean = (text: string): boolean => {
-    return /[ㄱ-ㅎ|ㅏ-ㅣ|가-힣]/.test(text);
-  };
+  // Translation state
+  const [isTranslating, setIsTranslating] = useState(false);
 
-  // Handle translate button click
   const handleTranslate = async () => {
     if (!prompt.trim() || isTranslating) return;
-
     setIsTranslating(true);
     try {
       const translated = await translateToEnglish(prompt);
       setPrompt(translated);
-
-      // Also translate negative prompt if it has Korean
       if (negativePrompt && containsKorean(negativePrompt)) {
         const translatedNeg = await translateToEnglish(negativePrompt);
         setNegativePrompt(translatedNeg);
       }
     } finally {
       setIsTranslating(false);
+    }
+  };
+
+  // VRAM free state
+  const { data: systemStatus } = useSystemStatus();
+  const [isFreeing, setIsFreeing] = useState(false);
+
+  const handleFreeVram = async () => {
+    setIsFreeing(true);
+    try {
+      await fetch('/api/system/free-vram', { method: 'POST' });
+    } catch {
+      // ignore
+    } finally {
+      setIsFreeing(false);
     }
   };
 
@@ -294,8 +347,42 @@ export function ClipEditor() {
 
   return (
     <div className="h-full flex flex-col">
-      <div className="p-4 border-b">
+      <div className="p-4 border-b space-y-3">
         <h2 className="text-lg font-semibold text-gray-900">Generate Clip</h2>
+
+        {/* GPU VRAM Bar */}
+        {systemStatus?.gpu && (() => {
+          const gpu = systemStatus.gpu;
+          const usedGB = (gpu.memoryUsed / 1024).toFixed(1);
+          const totalGB = (gpu.memoryTotal / 1024).toFixed(1);
+          const pct = gpu.memoryPercent;
+          const barColor = pct >= 80 ? 'bg-red-500' : pct >= 50 ? 'bg-yellow-500' : 'bg-green-500';
+          return (
+            <div className="space-y-1.5">
+              <div className="flex items-center justify-between text-xs">
+                <span className="text-gray-600 font-medium">VRAM {usedGB} / {totalGB} GB</span>
+                <div className="flex items-center gap-2 text-gray-500">
+                  <span>{gpu.temperature}°C</span>
+                  <span>{Math.round(gpu.powerDraw)}W</span>
+                  <button
+                    type="button"
+                    onClick={handleFreeVram}
+                    disabled={isFreeing}
+                    className="px-2 py-0.5 text-xs bg-gray-100 hover:bg-red-100 text-gray-600 hover:text-red-700 rounded border border-gray-200 hover:border-red-300 transition-colors disabled:opacity-50"
+                  >
+                    {isFreeing ? 'Freeing...' : 'Free VRAM'}
+                  </button>
+                </div>
+              </div>
+              <div className="w-full bg-gray-200 rounded-full h-2 overflow-hidden">
+                <div
+                  className={`${barColor} h-2 rounded-full transition-all duration-500`}
+                  style={{ width: `${pct}%` }}
+                />
+              </div>
+            </div>
+          );
+        })()}
       </div>
 
       <div className="flex-1 overflow-y-auto p-4 space-y-4">
@@ -337,20 +424,42 @@ export function ClipEditor() {
           </label>
           <select
             value={videoModel}
-            onChange={(e) => setVideoModel(e.target.value as typeof videoModel)}
+            onChange={(e) => {
+              const model = e.target.value as typeof videoModel;
+              setVideoModel(model);
+              if (model === 'wan21') {
+                setFrameCount(81);
+                setCfgScale(6.0);
+              } else {
+                if (frameCount > 32) setFrameCount(16);
+                setCfgScale(7.5);
+              }
+            }}
             className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
           >
             <option value="animateDiff">AnimateDiff (SD 1.5) - 빠름, 안정적</option>
             <option value="svd">Stable Video Diffusion - 고품질 이미지→영상</option>
             <option value="cogVideoX">CogVideoX - 텍스트→영상 특화</option>
             <option value="hunyuan">HunyuanVideo - 고품질 (VRAM 많이 필요)</option>
+            <option value="wan21">Wan2.1 (1.3B) - 긴 영상 (~5초, 81프레임)</option>
           </select>
-          <p className="text-xs text-gray-500 mt-1">
-            {videoModel === 'animateDiff' && '✓ 설치됨 - 12GB VRAM에서 안정적으로 동작'}
-            {videoModel === 'svd' && '✓ 설치됨 - 이미지 기반 영상 생성에 최적화 (24s)'}
-            {videoModel === 'cogVideoX' && '✓ 설치됨 - 텍스트 프롬프트 이해력이 뛰어남 (43s)'}
-            {videoModel === 'hunyuan' && '✓ 설치됨 - 고품질 T2V (73s)'}
-          </p>
+          {/* Actual rendering resolution info */}
+          <div className={`mt-2 px-3 py-2 rounded-lg text-xs ${resolution.scaled ? 'bg-amber-50 border border-amber-200' : 'bg-green-50 border border-green-200'}`}>
+            <div className="flex items-center justify-between">
+              <span className={resolution.scaled ? 'text-amber-700 font-medium' : 'text-green-700 font-medium'}>
+                렌더링 해상도: {resolution.width}x{resolution.height}
+              </span>
+              <span className="text-gray-500">
+                {frameCount}프레임 / {currentProject?.frameRate || 8}fps
+                {' '}= {(frameCount / (currentProject?.frameRate || 8)).toFixed(1)}초
+              </span>
+            </div>
+            {resolution.scaled && resolution.originalWidth !== resolution.width && (
+              <p className="text-amber-600 mt-1">
+                VRAM 제한으로 {resolution.originalWidth}x{resolution.originalHeight} → {resolution.width}x{resolution.height} 축소 적용
+              </p>
+            )}
+          </div>
         </div>
 
         {/* Reference Image Upload (for Image to Video) */}
@@ -461,36 +570,19 @@ export function ClipEditor() {
                 type="button"
                 onClick={handleTranslate}
                 disabled={isTranslating}
-                className="flex items-center gap-1 px-2 py-1 text-xs bg-green-100 text-green-700 rounded hover:bg-green-200 disabled:opacity-50 transition-colors"
+                className="px-2 py-0.5 text-xs bg-blue-50 text-blue-600 rounded border border-blue-200 hover:bg-blue-100 disabled:opacity-50 transition-colors"
               >
-                {isTranslating ? (
-                  <>
-                    <div className="animate-spin rounded-full h-3 w-3 border border-green-700 border-t-transparent"></div>
-                    번역 중...
-                  </>
-                ) : (
-                  <>
-                    <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                      <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M3 5h12M9 3v2m1.048 9.5A18.022 18.022 0 016.412 9m6.088 9h7M11 21l5-10 5 10M12.751 5C11.783 10.77 8.07 15.61 3 18.129" />
-                    </svg>
-                    한→영 번역
-                  </>
-                )}
+                {isTranslating ? 'Translating...' : '한→영 번역'}
               </button>
             )}
           </div>
           <textarea
             value={prompt}
             onChange={(e) => setPrompt(e.target.value)}
-            placeholder="한글 또는 영어로 입력하세요 (예: 아름다운 바다 일몰)"
+            placeholder="한글 또는 영어로 입력 (한글은 자동 번역됨)"
             rows={3}
             className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
           />
-          {containsKorean(prompt) && (
-            <p className="text-xs text-amber-600 mt-1">
-              ⚠️ 한글이 감지되었습니다. 생성 전 &ldquo;한→영 번역&rdquo; 버튼을 눌러주세요.
-            </p>
-          )}
         </div>
 
         {/* Negative Prompt */}
@@ -501,7 +593,7 @@ export function ClipEditor() {
           <textarea
             value={negativePrompt}
             onChange={(e) => setNegativePrompt(e.target.value)}
-            placeholder="흐릿함, 저품질, 왜곡 (한글 입력 시 자동 번역됨)"
+            placeholder="blurry, low quality, distorted"
             rows={2}
             className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 resize-none"
           />
@@ -545,8 +637,8 @@ export function ClipEditor() {
             <input
               type="range"
               min={8}
-              max={32}
-              step={4}
+              max={videoModel === 'wan21' ? 128 : 32}
+              step={videoModel === 'wan21' ? 16 : 4}
               value={frameCount}
               onChange={(e) => setFrameCount(Number(e.target.value))}
               className="w-full"

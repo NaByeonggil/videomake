@@ -7,6 +7,7 @@
 import React, { useState, useCallback } from 'react';
 import { useClips, useDeleteClip, useReorderClips } from '@/hooks/useClips';
 import { useProjectStore, Clip } from '@/stores/projectStore';
+import { toStorageUrl } from '@/lib/fileNaming';
 import { Button } from '../common/Button';
 import { ExportModal } from './ExportModal';
 
@@ -164,7 +165,7 @@ function ClipCard({
   };
 
   // Use video file for preview instead of thumbnail
-  const videoUrl = clip.filePath ? encodeURI(clip.filePath.replace('./public', '')) : null;
+  const videoUrl = clip.filePath ? toStorageUrl(clip.filePath) : null;
 
   return (
     <div
