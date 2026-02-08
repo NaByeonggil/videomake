@@ -216,6 +216,7 @@ export function ClipEditor() {
   // VRAM free state
   const { data: systemStatus } = useSystemStatus();
   const [isFreeing, setIsFreeing] = useState(false);
+  const [isRestarting, setIsRestarting] = useState(false);
 
   const handleFreeVram = async () => {
     setIsFreeing(true);
@@ -225,6 +226,21 @@ export function ClipEditor() {
       // ignore
     } finally {
       setIsFreeing(false);
+    }
+  };
+
+  const handleRestartWorkers = async () => {
+    setIsRestarting(true);
+    try {
+      const res = await fetch('/api/system/restart-workers', { method: 'POST' });
+      const json = await res.json();
+      if (!json.success) {
+        alert(`Restart failed: ${json.error}`);
+      }
+    } catch {
+      alert('Failed to restart workers');
+    } finally {
+      setIsRestarting(false);
     }
   };
 
@@ -707,6 +723,14 @@ export function ClipEditor() {
                     className="px-2 py-0.5 text-xs bg-gray-100 hover:bg-red-100 text-gray-600 hover:text-red-700 rounded border border-gray-200 hover:border-red-300 transition-colors disabled:opacity-50"
                   >
                     {isFreeing ? 'Freeing...' : 'Free VRAM'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRestartWorkers}
+                    disabled={isRestarting}
+                    className="px-2 py-0.5 text-xs bg-gray-100 hover:bg-orange-100 text-gray-600 hover:text-orange-700 rounded border border-gray-200 hover:border-orange-300 transition-colors disabled:opacity-50"
+                  >
+                    {isRestarting ? 'Restarting...' : 'Restart Workers'}
                   </button>
                 </div>
               </div>
