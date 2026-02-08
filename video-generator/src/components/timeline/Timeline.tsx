@@ -4,12 +4,14 @@
 
 'use client';
 
-import React, { useState, useCallback } from 'react';
+import React, { useState, useCallback, useEffect, useRef } from 'react';
 import { useClips, useDeleteClip, useReorderClips } from '@/hooks/useClips';
 import { useProjectStore, Clip } from '@/stores/projectStore';
 import { toStorageUrl } from '@/lib/fileNaming';
 import { Button } from '../common/Button';
+import { Modal } from '../common/Modal';
 import { ExportModal } from './ExportModal';
+import { useQueryClient } from '@tanstack/react-query';
 
 export function Timeline() {
   const currentProjectId = useProjectStore((state) => state.currentProjectId);
@@ -19,8 +21,33 @@ export function Timeline() {
   const deleteClip = useDeleteClip();
   const reorderClips = useReorderClips();
 
+  const queryClient = useQueryClient();
   const [draggedClipId, setDraggedClipId] = useState<string | null>(null);
   const [isExportModalOpen, setIsExportModalOpen] = useState(false);
+  const [enhancingClipId, setEnhancingClipId] = useState<string | null>(null);
+  const [playingClip, setPlayingClip] = useState<Clip | null>(null);
+
+  const handleEnhance = useCallback(async (clipId: string, e: React.MouseEvent) => {
+    e.stopPropagation();
+    setEnhancingClipId(clipId);
+    try {
+      const res = await fetch('/api/processing/enhance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clipId, scale: 2, targetFps: 30 }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        queryClient.invalidateQueries({ queryKey: ['clips'] });
+      } else {
+        alert(`Enhancement failed: ${json.error}`);
+      }
+    } catch {
+      alert('Enhancement request failed');
+    } finally {
+      setEnhancingClipId(null);
+    }
+  }, [queryClient]);
 
   const sortedClips = [...clips].sort((a, b) => a.orderIndex - b.orderIndex);
   const completedClips = sortedClips.filter((c) => c.clipStatus === 'completed');
@@ -116,8 +143,11 @@ export function Timeline() {
                 clip={clip}
                 isSelected={currentClipId === clip.id}
                 isDragging={draggedClipId === clip.id}
+                isEnhancing={enhancingClipId === clip.id}
                 onSelect={() => setCurrentClip(clip.id)}
+                onPlay={(e) => { e.stopPropagation(); setPlayingClip(clip); }}
                 onDelete={(e) => handleDeleteClip(clip.id, clip.clipName, e)}
+                onEnhance={(e) => handleEnhance(clip.id, e)}
                 onDragStart={(e) => handleDragStart(e, clip.id)}
                 onDragOver={handleDragOver}
                 onDrop={(e) => handleDrop(e, clip.id)}
@@ -132,6 +162,20 @@ export function Timeline() {
         onClose={() => setIsExportModalOpen(false)}
         clips={completedClips}
       />
+
+      {/* Video Player Modal */}
+      {playingClip && (
+        <VideoPlayerModal
+          clip={playingClip}
+          onClose={() => setPlayingClip(null)}
+          onEnhance={(e) => handleEnhance(playingClip.id, e)}
+          isEnhancing={enhancingClipId === playingClip.id}
+          onDelete={(e) => {
+            handleDeleteClip(playingClip.id, playingClip.clipName, e);
+            setPlayingClip(null);
+          }}
+        />
+      )}
     </div>
   );
 }
@@ -140,8 +184,11 @@ interface ClipCardProps {
   clip: Clip;
   isSelected: boolean;
   isDragging: boolean;
+  isEnhancing: boolean;
   onSelect: () => void;
+  onPlay: (e: React.MouseEvent) => void;
   onDelete: (e: React.MouseEvent) => void;
+  onEnhance: (e: React.MouseEvent) => void;
   onDragStart: (e: React.DragEvent) => void;
   onDragOver: (e: React.DragEvent) => void;
   onDrop: (e: React.DragEvent) => void;
@@ -151,8 +198,11 @@ function ClipCard({
   clip,
   isSelected,
   isDragging,
+  isEnhancing,
   onSelect,
+  onPlay,
   onDelete,
+  onEnhance,
   onDragStart,
   onDragOver,
   onDrop,
@@ -163,6 +213,32 @@ function ClipCard({
     completed: 'bg-green-500',
     failed: 'bg-red-500',
   };
+
+  // Simulated progress for HQ enhance (ffmpeg is synchronous, no real-time progress)
+  const [enhanceProgress, setEnhanceProgress] = useState(0);
+  const intervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (isEnhancing) {
+      setEnhanceProgress(5);
+      intervalRef.current = setInterval(() => {
+        setEnhanceProgress((prev) => {
+          if (prev >= 90) return prev + 0.5;
+          if (prev >= 70) return prev + 1;
+          if (prev >= 40) return prev + 2;
+          return prev + 3;
+        });
+      }, 500);
+    } else {
+      if (intervalRef.current) clearInterval(intervalRef.current);
+      if (enhanceProgress > 0) {
+        setEnhanceProgress(100);
+        const t = setTimeout(() => setEnhanceProgress(0), 1500);
+        return () => clearTimeout(t);
+      }
+    }
+    return () => { if (intervalRef.current) clearInterval(intervalRef.current); };
+  }, [isEnhancing]);
 
   // Use video file for preview instead of thumbnail
   const videoUrl = clip.filePath ? toStorageUrl(clip.filePath) : null;
@@ -205,6 +281,39 @@ function ClipCard({
           </div>
         )}
 
+        {/* Play button overlay */}
+        {videoUrl && clip.clipStatus === 'completed' && !isEnhancing && (
+          <button
+            onClick={onPlay}
+            className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity z-[5]"
+          >
+            <div className="w-10 h-10 rounded-full bg-white/90 flex items-center justify-center shadow-lg hover:scale-110 transition-transform">
+              <svg className="w-5 h-5 text-gray-900 ml-0.5" fill="currentColor" viewBox="0 0 24 24">
+                <path d="M8 5v14l11-7z" />
+              </svg>
+            </div>
+          </button>
+        )}
+
+        {/* HQ Enhance progress overlay */}
+        {isEnhancing && (
+          <div className="absolute inset-0 bg-black/60 flex flex-col items-center justify-center z-10">
+            <div className="text-white text-[10px] font-bold mb-1">HQ 처리 중</div>
+            <div className="w-3/4 h-1.5 bg-white/30 rounded-full overflow-hidden">
+              <div
+                className="h-full bg-purple-400 rounded-full transition-all duration-500"
+                style={{ width: `${Math.min(enhanceProgress, 100)}%` }}
+              />
+            </div>
+            <div className="text-white text-[9px] mt-1">{Math.min(Math.round(enhanceProgress), 100)}%</div>
+          </div>
+        )}
+        {enhanceProgress === 100 && !isEnhancing && (
+          <div className="absolute inset-0 bg-green-500/60 flex items-center justify-center z-10 animate-pulse">
+            <div className="text-white text-xs font-bold">HQ 완료!</div>
+          </div>
+        )}
+
         {/* Status indicator */}
         <div
           className={`absolute top-1 right-1 w-2 h-2 rounded-full ${
@@ -224,15 +333,151 @@ function ClipCard({
         </button>
       </div>
 
-      {/* Info */}
+      {/* Info + HQ button */}
       <div className="p-2 bg-white">
-        <p className="text-xs font-medium text-gray-900 truncate">
-          {clip.clipName}
-        </p>
+        <div className="flex items-center justify-between">
+          <p className="text-xs font-medium text-gray-900 truncate flex-1">
+            {clip.clipName}
+          </p>
+          {clip.clipStatus === 'completed' && (
+            <button
+              onClick={onEnhance}
+              disabled={isEnhancing}
+              className="ml-1 px-1.5 py-0.5 text-[10px] font-bold bg-purple-100 text-purple-700 rounded hover:bg-purple-200 transition-colors disabled:opacity-50 flex items-center gap-0.5 flex-shrink-0"
+              title="Upscale 2x + 30fps"
+            >
+              {isEnhancing ? (
+                <div className="animate-spin rounded-full h-2.5 w-2.5 border-[1.5px] border-purple-600 border-t-transparent"></div>
+              ) : (
+                <svg className="w-2.5 h-2.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+              )}
+              HQ
+            </button>
+          )}
+        </div>
         <p className="text-xs text-gray-500">
           {clip.durationSec ? `${clip.durationSec.toFixed(1)}s` : clip.clipStatus}
         </p>
       </div>
     </div>
+  );
+}
+
+/**
+ * Video Player Modal - Full-screen video playback with controls
+ */
+interface VideoPlayerModalProps {
+  clip: Clip;
+  onClose: () => void;
+  onEnhance: (e: React.MouseEvent) => void;
+  isEnhancing: boolean;
+  onDelete: (e: React.MouseEvent) => void;
+}
+
+function VideoPlayerModal({ clip, onClose, onEnhance, isEnhancing, onDelete }: VideoPlayerModalProps) {
+  const videoUrl = clip.filePath ? toStorageUrl(clip.filePath) : null;
+
+  return (
+    <Modal isOpen={true} onClose={onClose} title={clip.clipName} size="lg">
+      <div className="space-y-4">
+        {/* Video Player */}
+        {videoUrl ? (
+          <div className="bg-black rounded-lg overflow-hidden">
+            <video
+              src={videoUrl}
+              controls
+              autoPlay
+              loop
+              playsInline
+              className="w-full max-h-[50vh] object-contain"
+            >
+              Your browser does not support video playback.
+            </video>
+          </div>
+        ) : (
+          <div className="bg-gray-100 rounded-lg p-8 text-center text-gray-500">
+            Video not available
+          </div>
+        )}
+
+        {/* Clip Info */}
+        <div className="bg-gray-50 rounded-lg p-3 grid grid-cols-2 gap-2 text-sm">
+          <div>
+            <span className="text-gray-500">Prompt: </span>
+            <span className="text-gray-900">{clip.prompt || 'N/A'}</span>
+          </div>
+          <div>
+            <span className="text-gray-500">Frames: </span>
+            <span className="text-gray-900">{clip.frameCount || 'N/A'}</span>
+          </div>
+          <div>
+            <span className="text-gray-500">Steps: </span>
+            <span className="text-gray-900">{clip.stepsCount}</span>
+          </div>
+          <div>
+            <span className="text-gray-500">CFG: </span>
+            <span className="text-gray-900">{clip.cfgScale}</span>
+          </div>
+          {clip.seedValue && (
+            <div>
+              <span className="text-gray-500">Seed: </span>
+              <span className="text-gray-900 font-mono text-xs">{clip.seedValue}</span>
+            </div>
+          )}
+          <div>
+            <span className="text-gray-500">Created: </span>
+            <span className="text-gray-900">{new Date(clip.createdAt).toLocaleString('ko-KR')}</span>
+          </div>
+        </div>
+
+        {/* Action Buttons */}
+        <div className="flex items-center gap-2">
+          <button
+            onClick={onDelete}
+            className="inline-flex items-center px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors text-sm"
+          >
+            <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
+            </svg>
+            Delete
+          </button>
+
+          <button
+            onClick={onEnhance}
+            disabled={isEnhancing}
+            className="inline-flex items-center px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 text-sm"
+          >
+            {isEnhancing ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-1.5"></div>
+                HQ 처리 중...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                HQ Enhance
+              </>
+            )}
+          </button>
+
+          {videoUrl && (
+            <a
+              href={videoUrl}
+              download={clip.fileName || 'video.mp4'}
+              className="inline-flex items-center px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm ml-auto"
+            >
+              <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
+              </svg>
+              Download
+            </a>
+          )}
+        </div>
+      </div>
+    </Modal>
   );
 }

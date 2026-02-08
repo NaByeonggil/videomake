@@ -26,7 +26,7 @@ function getActualResolution(
   const originalHeight = match ? parseInt(match[2], 10) : 512;
 
   if (videoModel === 'wan21') {
-    return { width: 480, height: 320, scaled: true, originalWidth, originalHeight };
+    return { width: 640, height: 360, scaled: true, originalWidth, originalHeight };
   }
   if (videoModel === 'svd') {
     return { width: 768, height: 512, scaled: originalWidth !== 768 || originalHeight !== 512, originalWidth, originalHeight };
@@ -63,6 +63,61 @@ export function ClipEditor() {
   const [frameCount, setFrameCount] = useState(16);
   const [generationType, setGenerationType] = useState<'textToVideo' | 'imageToVideo'>('textToVideo');
   const [videoModel, setVideoModel] = useState<'animateDiff' | 'svd' | 'cogVideoX' | 'hunyuan' | 'wan21'>('animateDiff');
+
+  // Model options per generation type
+  const t2vModels = [
+    { value: 'animateDiff', label: 'AnimateDiff (SD 1.5)', desc: '빠름, 안정적' },
+    { value: 'cogVideoX', label: 'CogVideoX 2B', desc: '텍스트→영상' },
+    { value: 'hunyuan', label: 'HunyuanVideo', desc: '고품질 T2V (GGUF)' },
+    { value: 'wan21', label: 'Wan2.1 1.3B', desc: '빠른 T2V, ~5초' },
+  ] as const;
+
+  const i2vModels = [
+    { value: 'animateDiff', label: 'AnimateDiff + IPAdapter', desc: '빠름, SD 1.5 기반' },
+    { value: 'svd', label: 'SVD XT', desc: '고품질 I2V, 24fps' },
+    { value: 'cogVideoX', label: 'CogVideoX 5B I2V', desc: '고품질 I2V (GGUF)' },
+    { value: 'wan21', label: 'Wan2.1 14B I2V', desc: '최고 품질, ~5초 (GGUF)' },
+  ] as const;
+
+  const currentModels = generationType === 'textToVideo' ? t2vModels : i2vModels;
+
+  // Apply model defaults
+  const applyModelDefaults = (model: string, genType: string) => {
+    if (model === 'wan21') {
+      setFrameCount(81);
+      setCfgScale(6.0);
+      setSteps(genType === 'imageToVideo' ? 25 : 20);
+    } else if (model === 'svd') {
+      setFrameCount(16);
+      setCfgScale(2.5);
+      setSteps(25);
+    } else if (model === 'cogVideoX') {
+      if (frameCount > 32) setFrameCount(16);
+      setCfgScale(6.0);
+      setSteps(20);
+    } else if (model === 'hunyuan') {
+      if (frameCount > 32) setFrameCount(16);
+      setCfgScale(1.0);
+      setSteps(20);
+    } else {
+      if (frameCount > 32) setFrameCount(16);
+      setCfgScale(7.5);
+      setSteps(20);
+    }
+  };
+
+  // Handle generation type switch with model auto-selection
+  const handleGenerationTypeChange = (newType: 'textToVideo' | 'imageToVideo') => {
+    setGenerationType(newType);
+    const validModels = newType === 'textToVideo' ? t2vModels : i2vModels;
+    const isCurrentValid = validModels.some(m => m.value === videoModel);
+    if (!isCurrentValid) {
+      // Switch to best default: wan21 for I2V, animateDiff for T2V
+      const newModel = newType === 'imageToVideo' ? 'wan21' : 'animateDiff';
+      setVideoModel(newModel);
+      applyModelDefaults(newModel, newType);
+    }
+  };
 
   // Image upload state
   const [referenceImage, setReferenceImage] = useState<string | null>(null);
@@ -128,6 +183,20 @@ export function ClipEditor() {
       setIsFreeing(false);
     }
   };
+
+  // Long video state
+  const [showLongVideo, setShowLongVideo] = useState(false);
+  const [longVideoDuration, setLongVideoDuration] = useState(90); // seconds
+  const [longVideoHqEnhance, setLongVideoHqEnhance] = useState(true);
+  const [isLongVideoGenerating, setIsLongVideoGenerating] = useState(false);
+  const [longVideoJobId, setLongVideoJobId] = useState<string | null>(null);
+  const [longVideoProgress, setLongVideoProgress] = useState(0);
+  const [longVideoMessage, setLongVideoMessage] = useState('');
+  const [longVideoSegment, setLongVideoSegment] = useState<{ current: number; total: number } | null>(null);
+
+  const SECONDS_PER_SEGMENT = 5.0625;
+  const longVideoSegments = Math.ceil(longVideoDuration / SECONDS_PER_SEGMENT);
+  const longVideoEstimatedMinutes = Math.round(longVideoSegments * 9);
 
   const [activeJobId, setActiveJobId] = useState<string | null>(null);
   const [isGenerating, setIsGenerating] = useState(false);
@@ -206,6 +275,170 @@ export function ClipEditor() {
 
     return () => clearInterval(pollInterval);
   }, [activeJobId, handleComplete]);
+
+  // Long video progress polling
+  useEffect(() => {
+    if (!longVideoJobId) return;
+
+    const pollInterval = setInterval(async () => {
+      try {
+        const res = await fetch(`${API_BASE}/jobs/${longVideoJobId}`);
+        if (res.ok) {
+          const json = await res.json();
+          const job = json.data || json;
+
+          if (job.progressPercent !== undefined) {
+            setLongVideoProgress(job.progressPercent);
+          }
+
+          if (job.jobStatus === 'processing') {
+            setLongVideoMessage(job.errorMessage || `Processing... ${job.progressPercent}%`);
+          } else if (job.jobStatus === 'completed') {
+            setLongVideoMessage('Long video completed!');
+            setLongVideoProgress(100);
+            setTimeout(() => {
+              setIsLongVideoGenerating(false);
+              setLongVideoJobId(null);
+              setLongVideoProgress(0);
+              setLongVideoMessage('');
+              setLongVideoSegment(null);
+              setShowLongVideo(false);
+            }, 3000);
+            clearInterval(pollInterval);
+          } else if (job.jobStatus === 'failed') {
+            setLongVideoMessage(`Failed: ${job.errorMessage || 'Unknown error'}`);
+            setTimeout(() => {
+              setIsLongVideoGenerating(false);
+              setLongVideoJobId(null);
+              setLongVideoProgress(0);
+              setLongVideoMessage('');
+              setLongVideoSegment(null);
+            }, 5000);
+            clearInterval(pollInterval);
+          }
+        }
+      } catch { /* ignore */ }
+    }, 3000);
+
+    return () => clearInterval(pollInterval);
+  }, [longVideoJobId]);
+
+  // Long video progress SSE (segment-level updates from Redis)
+  useEffect(() => {
+    if (!longVideoJobId) return;
+
+    const evtSource = new EventSource(`${API_BASE}/jobs/${longVideoJobId}/progress`);
+    evtSource.onmessage = (event) => {
+      try {
+        const data = JSON.parse(event.data);
+        if (data.percent !== undefined) setLongVideoProgress(data.percent);
+        if (data.message) setLongVideoMessage(data.message);
+        if (data.segment && data.totalSegments) {
+          setLongVideoSegment({ current: data.segment, total: data.totalSegments });
+        }
+        if (data.type === 'completed') {
+          setLongVideoMessage('Long video completed!');
+          setLongVideoProgress(100);
+          setTimeout(() => {
+            setIsLongVideoGenerating(false);
+            setLongVideoJobId(null);
+            setLongVideoProgress(0);
+            setLongVideoMessage('');
+            setLongVideoSegment(null);
+            setShowLongVideo(false);
+          }, 3000);
+          evtSource.close();
+        }
+        if (data.type === 'error') {
+          setLongVideoMessage(`Failed: ${data.message}`);
+          setTimeout(() => {
+            setIsLongVideoGenerating(false);
+            setLongVideoJobId(null);
+            setLongVideoProgress(0);
+            setLongVideoMessage('');
+            setLongVideoSegment(null);
+          }, 5000);
+          evtSource.close();
+        }
+      } catch { /* ignore */ }
+    };
+    evtSource.onerror = () => {
+      // SSE failed, rely on polling fallback
+      evtSource.close();
+    };
+    return () => evtSource.close();
+  }, [longVideoJobId]);
+
+  const handleLongVideoGenerate = async () => {
+    if (!currentProjectId || !prompt.trim()) return;
+
+    setIsLongVideoGenerating(true);
+    setLongVideoProgress(0);
+    setLongVideoMessage('Preparing long video...');
+
+    // Auto-translate Korean
+    let finalPrompt = prompt.trim();
+    let finalNegativePrompt = negativePrompt.trim();
+
+    if (containsKorean(finalPrompt)) {
+      setLongVideoMessage('Translating prompt...');
+      finalPrompt = await translateToEnglish(finalPrompt);
+      setPrompt(finalPrompt);
+    }
+    if (finalNegativePrompt && containsKorean(finalNegativePrompt)) {
+      finalNegativePrompt = await translateToEnglish(finalNegativePrompt);
+      setNegativePrompt(finalNegativePrompt);
+    }
+
+    try {
+      const res = await fetch(`${API_BASE}/processing/long-video`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({
+          projectId: currentProjectId,
+          prompt: finalPrompt,
+          negativePrompt: finalNegativePrompt || undefined,
+          referenceImage: generationType === 'imageToVideo' ? referenceImage || undefined : undefined,
+          targetDuration: longVideoDuration,
+          framesPerSegment: 81,
+          videoModel: 'wan21',
+          denoise: 0.7,
+          hqEnhance: longVideoHqEnhance,
+        }),
+      });
+
+      const json = await res.json();
+      if (json.success) {
+        setLongVideoJobId(json.data.jobId);
+        setLongVideoSegment({ current: 0, total: longVideoSegments });
+        setLongVideoMessage(`Queued: ${json.data.totalSegments} segments, ${json.data.estimatedTime}`);
+      } else {
+        setLongVideoMessage(`Error: ${json.error}`);
+        setTimeout(() => {
+          setIsLongVideoGenerating(false);
+          setLongVideoMessage('');
+        }, 3000);
+      }
+    } catch {
+      setLongVideoMessage('Failed to start long video');
+      setTimeout(() => {
+        setIsLongVideoGenerating(false);
+        setLongVideoMessage('');
+      }, 3000);
+    }
+  };
+
+  const handleCancelLongVideo = async () => {
+    if (!longVideoJobId) return;
+    try {
+      await fetch(`${API_BASE}/jobs/${longVideoJobId}`, { method: 'DELETE' });
+      setIsLongVideoGenerating(false);
+      setLongVideoJobId(null);
+      setLongVideoProgress(0);
+      setLongVideoMessage('');
+      setLongVideoSegment(null);
+    } catch { /* ignore */ }
+  };
 
   const handleImageUpload = async (e: React.ChangeEvent<HTMLInputElement>) => {
     const file = e.target.files?.[0];
@@ -394,7 +627,7 @@ export function ClipEditor() {
           <div className="flex gap-2">
             <button
               type="button"
-              onClick={() => setGenerationType('textToVideo')}
+              onClick={() => handleGenerationTypeChange('textToVideo')}
               className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
                 generationType === 'textToVideo'
                   ? 'bg-blue-600 text-white'
@@ -405,10 +638,10 @@ export function ClipEditor() {
             </button>
             <button
               type="button"
-              onClick={() => setGenerationType('imageToVideo')}
+              onClick={() => handleGenerationTypeChange('imageToVideo')}
               className={`flex-1 py-2 px-4 rounded-lg text-sm font-medium transition-colors ${
                 generationType === 'imageToVideo'
-                  ? 'bg-blue-600 text-white'
+                  ? 'bg-purple-600 text-white'
                   : 'bg-gray-100 text-gray-700 hover:bg-gray-200'
               }`}
             >
@@ -420,29 +653,36 @@ export function ClipEditor() {
         {/* Video Model Selection */}
         <div>
           <label className="block text-sm font-medium text-gray-700 mb-1">
-            Video Model
+            {generationType === 'textToVideo' ? 'T2V 모델' : 'I2V 모델'}
           </label>
-          <select
-            value={videoModel}
-            onChange={(e) => {
-              const model = e.target.value as typeof videoModel;
-              setVideoModel(model);
-              if (model === 'wan21') {
-                setFrameCount(81);
-                setCfgScale(6.0);
-              } else {
-                if (frameCount > 32) setFrameCount(16);
-                setCfgScale(7.5);
-              }
-            }}
-            className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white"
-          >
-            <option value="animateDiff">AnimateDiff (SD 1.5) - 빠름, 안정적</option>
-            <option value="svd">Stable Video Diffusion - 고품질 이미지→영상</option>
-            <option value="cogVideoX">CogVideoX - 텍스트→영상 특화</option>
-            <option value="hunyuan">HunyuanVideo - 고품질 (VRAM 많이 필요)</option>
-            <option value="wan21">Wan2.1 (1.3B) - 긴 영상 (~5초, 81프레임)</option>
-          </select>
+          <div className="space-y-1.5">
+            {currentModels.map((m) => (
+              <button
+                key={m.value}
+                type="button"
+                onClick={() => {
+                  setVideoModel(m.value as typeof videoModel);
+                  applyModelDefaults(m.value, generationType);
+                }}
+                className={`w-full text-left px-3 py-2.5 rounded-lg border transition-all ${
+                  videoModel === m.value
+                    ? generationType === 'imageToVideo'
+                      ? 'bg-purple-50 border-purple-400 ring-1 ring-purple-300'
+                      : 'bg-blue-50 border-blue-400 ring-1 ring-blue-300'
+                    : 'bg-white border-gray-200 hover:border-gray-300 hover:bg-gray-50'
+                }`}
+              >
+                <div className="flex items-center justify-between">
+                  <span className={`text-sm font-medium ${videoModel === m.value ? (generationType === 'imageToVideo' ? 'text-purple-800' : 'text-blue-800') : 'text-gray-800'}`}>
+                    {m.label}
+                  </span>
+                  <span className={`text-xs ${videoModel === m.value ? (generationType === 'imageToVideo' ? 'text-purple-600' : 'text-blue-600') : 'text-gray-400'}`}>
+                    {m.desc}
+                  </span>
+                </div>
+              </button>
+            ))}
+          </div>
           {/* Actual rendering resolution info */}
           <div className={`mt-2 px-3 py-2 rounded-lg text-xs ${resolution.scaled ? 'bg-amber-50 border border-amber-200' : 'bg-green-50 border border-green-200'}`}>
             <div className="flex items-center justify-between">
@@ -450,8 +690,8 @@ export function ClipEditor() {
                 렌더링 해상도: {resolution.width}x{resolution.height}
               </span>
               <span className="text-gray-500">
-                {frameCount}프레임 / {currentProject?.frameRate || 8}fps
-                {' '}= {(frameCount / (currentProject?.frameRate || 8)).toFixed(1)}초
+                {frameCount}프레임 / {videoModel === 'wan21' ? 16 : (currentProject?.frameRate || 8)}fps
+                {' '}= {(frameCount / (videoModel === 'wan21' ? 16 : (currentProject?.frameRate || 8))).toFixed(1)}초
               </span>
             </div>
             {resolution.scaled && resolution.originalWidth !== resolution.width && (
@@ -460,6 +700,21 @@ export function ClipEditor() {
               </p>
             )}
           </div>
+          {/* Model detail info */}
+          {videoModel === 'wan21' && generationType === 'imageToVideo' && (
+            <div className="mt-2 px-3 py-2 rounded-lg text-xs bg-purple-50 border border-purple-200">
+              <p className="text-purple-700 font-medium">
+                14B Q3_K_M GGUF - CLIP Vision + 네이티브 이미지 컨디셔닝
+              </p>
+            </div>
+          )}
+          {videoModel === 'cogVideoX' && generationType === 'imageToVideo' && (
+            <div className="mt-2 px-3 py-2 rounded-lg text-xs bg-purple-50 border border-purple-200">
+              <p className="text-purple-700 font-medium">
+                5B Q4_0 GGUF - image_cond_latents 기반 I2V
+              </p>
+            </div>
+          )}
         </div>
 
         {/* Reference Image Upload (for Image to Video) */}
@@ -517,45 +772,62 @@ export function ClipEditor() {
               </button>
             )}
 
-            {/* Denoise - How much to change from original */}
-            <div className="mt-3">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Motion Strength: {(denoise * 100).toFixed(0)}%
-              </label>
-              <input
-                type="range"
-                min={0.1}
-                max={0.9}
-                step={0.1}
-                value={denoise}
-                onChange={(e) => setDenoise(Number(e.target.value))}
-                className="w-full"
-              />
-              <div className="flex justify-between text-xs text-gray-400 mt-1">
-                <span>원본 유지 (적은 움직임)</span>
-                <span>많은 변화 (큰 움직임)</span>
+            {/* Wan2.1 I2V / SVD - no denoise or IPAdapter controls needed */}
+            {videoModel === 'wan21' ? (
+              <div className="mt-3 px-3 py-2 bg-purple-50 border border-purple-200 rounded-lg">
+                <p className="text-xs text-purple-700">
+                  Wan2.1 I2V는 CLIP Vision과 네이티브 이미지 컨디셔닝을 사용합니다. 프롬프트로 동작을 제어하세요.
+                </p>
               </div>
-            </div>
+            ) : videoModel === 'svd' ? (
+              <div className="mt-3 px-3 py-2 bg-blue-50 border border-blue-200 rounded-lg">
+                <p className="text-xs text-blue-700">
+                  SVD는 이미지 기반 자동 모션 생성입니다. 프롬프트 영향 없음.
+                </p>
+              </div>
+            ) : (
+              <>
+                {/* Denoise - How much to change from original */}
+                <div className="mt-3">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Motion Strength: {(denoise * 100).toFixed(0)}%
+                  </label>
+                  <input
+                    type="range"
+                    min={0.1}
+                    max={0.9}
+                    step={0.1}
+                    value={denoise}
+                    onChange={(e) => setDenoise(Number(e.target.value))}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400 mt-1">
+                    <span>원본 유지 (적은 움직임)</span>
+                    <span>많은 변화 (큰 움직임)</span>
+                  </div>
+                </div>
 
-            {/* IP Adapter Weight */}
-            <div className="mt-3">
-              <label className="block text-sm font-medium text-gray-700 mb-1">
-                Image Consistency: {ipAdapterWeight.toFixed(1)}
-              </label>
-              <input
-                type="range"
-                min={0.5}
-                max={1.5}
-                step={0.1}
-                value={ipAdapterWeight}
-                onChange={(e) => setIpAdapterWeight(Number(e.target.value))}
-                className="w-full"
-              />
-              <div className="flex justify-between text-xs text-gray-400 mt-1">
-                <span>약한 일관성</span>
-                <span>강한 일관성</span>
-              </div>
-            </div>
+                {/* IP Adapter Weight */}
+                <div className="mt-3">
+                  <label className="block text-sm font-medium text-gray-700 mb-1">
+                    Image Consistency: {ipAdapterWeight.toFixed(1)}
+                  </label>
+                  <input
+                    type="range"
+                    min={0.5}
+                    max={1.5}
+                    step={0.1}
+                    value={ipAdapterWeight}
+                    onChange={(e) => setIpAdapterWeight(Number(e.target.value))}
+                    className="w-full"
+                  />
+                  <div className="flex justify-between text-xs text-gray-400 mt-1">
+                    <span>약한 일관성</span>
+                    <span>강한 일관성</span>
+                  </div>
+                </div>
+              </>
+            )}
           </div>
         )}
 
@@ -634,15 +906,30 @@ export function ClipEditor() {
             <label className="block text-sm font-medium text-gray-700 mb-1">
               Frames: {frameCount}
             </label>
-            <input
-              type="range"
-              min={8}
-              max={videoModel === 'wan21' ? 128 : 32}
-              step={videoModel === 'wan21' ? 16 : 4}
-              value={frameCount}
-              onChange={(e) => setFrameCount(Number(e.target.value))}
-              className="w-full"
-            />
+            {videoModel === 'wan21' ? (
+              <select
+                value={frameCount}
+                onChange={(e) => setFrameCount(Number(e.target.value))}
+                className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500 bg-white text-sm"
+              >
+                <option value={33}>33 (~2초)</option>
+                <option value={49}>49 (~3초)</option>
+                <option value={65}>65 (~4초)</option>
+                <option value={81}>81 (~5초)</option>
+                <option value={97}>97 (~6초)</option>
+                <option value={113}>113 (~7초)</option>
+              </select>
+            ) : (
+              <input
+                type="range"
+                min={8}
+                max={32}
+                step={4}
+                value={frameCount}
+                onChange={(e) => setFrameCount(Number(e.target.value))}
+                className="w-full"
+              />
+            )}
           </div>
 
           <div>
@@ -657,6 +944,113 @@ export function ClipEditor() {
               className="w-full px-3 py-2 border rounded-lg focus:outline-none focus:ring-2 focus:ring-blue-500"
             />
           </div>
+        </div>
+
+        {/* Long Video Section */}
+        <div className="border-t pt-4">
+          <button
+            type="button"
+            onClick={() => setShowLongVideo(!showLongVideo)}
+            className="w-full flex items-center justify-between px-3 py-2 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-lg hover:border-indigo-300 transition-colors"
+          >
+            <span className="text-sm font-medium text-indigo-800">Long Video (Multi-Segment)</span>
+            <svg className={`w-4 h-4 text-indigo-600 transition-transform ${showLongVideo ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
+            </svg>
+          </button>
+
+          {showLongVideo && (
+            <div className="mt-3 space-y-3 px-1">
+              {/* Duration selector */}
+              <div>
+                <label className="block text-sm font-medium text-gray-700 mb-1">
+                  Target Duration: {longVideoDuration}s
+                </label>
+                <div className="flex gap-2">
+                  {[30, 60, 90, 120].map((d) => (
+                    <button
+                      key={d}
+                      type="button"
+                      onClick={() => setLongVideoDuration(d)}
+                      className={`flex-1 py-1.5 text-sm rounded-lg border transition-colors ${
+                        longVideoDuration === d
+                          ? 'bg-indigo-600 text-white border-indigo-600'
+                          : 'bg-white text-gray-700 border-gray-200 hover:border-indigo-300'
+                      }`}
+                    >
+                      {d}s
+                    </button>
+                  ))}
+                </div>
+              </div>
+
+              {/* Segment info */}
+              <div className="px-3 py-2 bg-indigo-50 border border-indigo-200 rounded-lg text-xs">
+                <div className="flex justify-between text-indigo-700">
+                  <span className="font-medium">{longVideoSegments} segments x 5s = {(longVideoSegments * SECONDS_PER_SEGMENT).toFixed(0)}s</span>
+                  <span>~{longVideoEstimatedMinutes >= 60 ? `${(longVideoEstimatedMinutes / 60).toFixed(1)} hours` : `${longVideoEstimatedMinutes} min`}</span>
+                </div>
+                <p className="text-indigo-600 mt-1">
+                  Wan2.1: T2V 1.3B (seg 1) → I2V 14B (seg 2+) / 640x360 @ 16fps
+                </p>
+              </div>
+
+              {/* HQ Enhance toggle */}
+              <label className="flex items-center gap-2 cursor-pointer">
+                <input
+                  type="checkbox"
+                  checked={longVideoHqEnhance}
+                  onChange={(e) => setLongVideoHqEnhance(e.target.checked)}
+                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+                />
+                <span className="text-sm text-gray-700">HQ Enhance (720p 30fps)</span>
+              </label>
+
+              {/* Long video progress */}
+              {isLongVideoGenerating && (
+                <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg p-3 border border-indigo-200">
+                  <div className="flex items-center gap-2 mb-2">
+                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-indigo-600 border-t-transparent"></div>
+                    <span className="font-medium text-indigo-800 text-sm">
+                      {longVideoSegment
+                        ? `Segment ${longVideoSegment.current}/${longVideoSegment.total}`
+                        : 'Starting...'}
+                    </span>
+                  </div>
+                  <div className="w-full bg-indigo-200 rounded-full h-3 overflow-hidden">
+                    <div
+                      className="bg-indigo-600 h-3 rounded-full transition-all duration-500"
+                      style={{ width: `${longVideoProgress}%` }}
+                    ></div>
+                  </div>
+                  <div className="mt-1.5 flex justify-between text-xs">
+                    <span className="text-indigo-700">{longVideoMessage}</span>
+                    <span className="font-medium text-indigo-800">{longVideoProgress}%</span>
+                  </div>
+                </div>
+              )}
+
+              {/* Start / Cancel button */}
+              {isLongVideoGenerating ? (
+                <button
+                  type="button"
+                  onClick={handleCancelLongVideo}
+                  className="w-full py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors"
+                >
+                  Cancel Long Video
+                </button>
+              ) : (
+                <button
+                  type="button"
+                  onClick={handleLongVideoGenerate}
+                  disabled={!prompt.trim() || isGenerating}
+                  className="w-full py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+                >
+                  Start Long Video ({longVideoSegments} segments)
+                </button>
+              )}
+            </div>
+          )}
         </div>
 
       </div>

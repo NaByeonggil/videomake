@@ -56,11 +56,13 @@ export async function POST(request: NextRequest) {
       );
     }
 
-    // Get next clip index for this project
-    const clipCount = await prisma.clip.count({
+    // Get next clip index (use max orderIndex to avoid duplicates after deletion)
+    const maxClip = await prisma.clip.findFirst({
       where: { projectId: validated.projectId },
+      orderBy: { orderIndex: 'desc' },
+      select: { orderIndex: true },
     });
-    const nextIndex = clipCount + 1;
+    const nextIndex = (maxClip?.orderIndex ?? 0) + 1;
 
     // Auto-generate clipName if not provided
     const clipName = validated.clipName || `Clip ${nextIndex}`;

@@ -4,20 +4,32 @@
 
 'use client';
 
-import { useState } from 'react';
+import { useState, useCallback, useEffect, useRef } from 'react';
 import { useProjectStore, Clip } from '@/stores/projectStore';
 import { useClips, useDeleteClip } from '@/hooks/useClips';
 import { toStorageUrl } from '@/lib/fileNaming';
 import { Modal } from '@/components/common/Modal';
+import { useQueryClient } from '@tanstack/react-query';
 
 interface VideoPlayerModalProps {
   clip: Clip;
   onClose: () => void;
   onDelete: () => void;
   isDeleting: boolean;
+  onEnhance: (clipId: string) => void;
+  isEnhancing: boolean;
+  enhanceResult: EnhanceResult | null;
 }
 
-function VideoPlayerModal({ clip, onClose, onDelete, isDeleting }: VideoPlayerModalProps) {
+interface EnhanceResult {
+  originalResolution: string;
+  enhancedResolution: string;
+  fps: number;
+  duration: string;
+  size: string;
+}
+
+function VideoPlayerModal({ clip, onClose, onDelete, isDeleting, onEnhance, isEnhancing, enhanceResult }: VideoPlayerModalProps) {
   const videoUrl = clip.filePath
     ? toStorageUrl(clip.filePath)
     : null;
@@ -88,25 +100,59 @@ function VideoPlayerModal({ clip, onClose, onDelete, isDeleting }: VideoPlayerMo
           </div>
         </div>
 
+        {/* Enhance Result */}
+        {enhanceResult && (
+          <div className="bg-green-50 border border-green-200 rounded-lg p-3 text-sm">
+            <p className="font-medium text-green-800 mb-1">HQ Enhancement 완료!</p>
+            <div className="grid grid-cols-2 gap-1 text-xs text-green-700">
+              <span>해상도: {enhanceResult.originalResolution} → {enhanceResult.enhancedResolution}</span>
+              <span>FPS: {enhanceResult.fps}fps</span>
+              <span>길이: {enhanceResult.duration}초</span>
+              <span>크기: {enhanceResult.size}</span>
+            </div>
+          </div>
+        )}
+
         {/* Action Buttons */}
-        <div className="flex justify-between">
+        <div className="flex items-center gap-2">
           <button
             onClick={onDelete}
-            disabled={isDeleting}
-            className="inline-flex items-center px-4 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            disabled={isDeleting || isEnhancing}
+            className="inline-flex items-center px-3 py-2 bg-red-600 text-white rounded-lg hover:bg-red-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
           >
-            <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
               <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" />
             </svg>
-            {isDeleting ? 'Deleting...' : 'Delete'}
+            {isDeleting ? '...' : 'Delete'}
           </button>
+
+          <button
+            onClick={() => onEnhance(clip.id)}
+            disabled={isEnhancing || isDeleting}
+            className="inline-flex items-center px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+          >
+            {isEnhancing ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-1.5"></div>
+                처리 중...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                </svg>
+                HQ Enhance
+              </>
+            )}
+          </button>
+
           {videoUrl && (
             <a
               href={videoUrl}
               download={clip.fileName || 'video.mp4'}
-              className="inline-flex items-center px-4 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors"
+              className="inline-flex items-center px-3 py-2 bg-blue-600 text-white rounded-lg hover:bg-blue-700 transition-colors text-sm ml-auto"
             >
-              <svg className="w-4 h-4 mr-2" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+              <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
                 <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4" />
               </svg>
               Download
@@ -122,7 +168,62 @@ export function VideoGallery() {
   const { currentProjectId, clips } = useProjectStore();
   const { isLoading } = useClips(currentProjectId);
   const deleteClip = useDeleteClip();
+  const queryClient = useQueryClient();
   const [selectedClip, setSelectedClip] = useState<Clip | null>(null);
+  const [isEnhancing, setIsEnhancing] = useState(false);
+  const [enhanceResult, setEnhanceResult] = useState<EnhanceResult | null>(null);
+  const [enhancingCardId, setEnhancingCardId] = useState<string | null>(null);
+  const [resolutions, setResolutions] = useState<Record<string, string>>({});
+  const [enhanceProgress, setEnhanceProgress] = useState(0);
+  const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
+
+  useEffect(() => {
+    if (enhancingCardId) {
+      setEnhanceProgress(5);
+      progressIntervalRef.current = setInterval(() => {
+        setEnhanceProgress((prev) => {
+          if (prev >= 90) return prev + 0.5;
+          if (prev >= 70) return prev + 1;
+          if (prev >= 40) return prev + 2;
+          return prev + 3;
+        });
+      }, 500);
+    } else {
+      if (progressIntervalRef.current) clearInterval(progressIntervalRef.current);
+      if (enhanceProgress > 0) {
+        setEnhanceProgress(100);
+        const t = setTimeout(() => setEnhanceProgress(0), 1500);
+        return () => clearTimeout(t);
+      }
+    }
+    return () => { if (progressIntervalRef.current) clearInterval(progressIntervalRef.current); };
+  }, [enhancingCardId]);
+
+  const handleEnhance = useCallback(async (clipId: string) => {
+    setIsEnhancing(true);
+    setEnhanceResult(null);
+    setEnhancingCardId(clipId);
+    try {
+      const res = await fetch('/api/processing/enhance', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ clipId, scale: 2, targetFps: 30 }),
+      });
+      const json = await res.json();
+      if (json.success) {
+        setEnhanceResult(json.data);
+        // Refetch clips to get updated file path
+        queryClient.invalidateQueries({ queryKey: ['clips'] });
+      } else {
+        alert(`Enhancement failed: ${json.error}`);
+      }
+    } catch {
+      alert('Enhancement request failed');
+    } finally {
+      setIsEnhancing(false);
+      setEnhancingCardId(null);
+    }
+  }, [queryClient]);
 
   const handleDelete = async (clip: Clip, e?: React.MouseEvent) => {
     if (e) {
@@ -201,6 +302,12 @@ export function VideoGallery() {
                     className="w-full h-full object-cover"
                     muted
                     loop
+                    onLoadedMetadata={(e) => {
+                      const v = e.currentTarget;
+                      if (v.videoWidth && v.videoHeight) {
+                        setResolutions((prev) => ({ ...prev, [clip.id]: `${v.videoWidth}x${v.videoHeight}` }));
+                      }
+                    }}
                     onMouseEnter={(e) => e.currentTarget.play()}
                     onMouseLeave={(e) => {
                       e.currentTarget.pause();
@@ -215,7 +322,23 @@ export function VideoGallery() {
                   </div>
                 )}
 
+                {/* HQ Enhance progress overlay */}
+                {enhancingCardId === clip.id && (
+                  <div className="absolute inset-0 bg-black/70 flex flex-col items-center justify-center z-10">
+                    <div className="animate-spin rounded-full h-8 w-8 border-3 border-purple-400 border-t-transparent mb-2"></div>
+                    <div className="text-white text-xs font-bold mb-1">HQ 처리 중</div>
+                    <div className="w-3/4 h-2 bg-white/30 rounded-full overflow-hidden">
+                      <div
+                        className="h-full bg-purple-400 rounded-full transition-all duration-500"
+                        style={{ width: `${Math.min(enhanceProgress, 100)}%` }}
+                      />
+                    </div>
+                    <div className="text-white text-xs mt-1">{Math.min(Math.round(enhanceProgress), 100)}%</div>
+                  </div>
+                )}
+
                 {/* Play overlay */}
+                {enhancingCardId !== clip.id && (
                 <div className="absolute inset-0 flex items-center justify-center bg-black/30 opacity-0 group-hover:opacity-100 transition-opacity pointer-events-none">
                   <div className="w-12 h-12 rounded-full bg-white/90 flex items-center justify-center">
                     <svg className="w-6 h-6 text-gray-900 ml-1" fill="currentColor" viewBox="0 0 24 24">
@@ -223,6 +346,14 @@ export function VideoGallery() {
                     </svg>
                   </div>
                 </div>
+                )}
+
+                {/* Resolution badge */}
+                {resolutions[clip.id] && (
+                  <div className="absolute bottom-2 left-2 px-1.5 py-0.5 bg-black/70 rounded text-[10px] font-mono text-white z-[2]">
+                    {resolutions[clip.id]}
+                  </div>
+                )}
 
                 {/* Delete button on card */}
                 <button
@@ -238,12 +369,33 @@ export function VideoGallery() {
 
               {/* Clip Info */}
               <div className="p-3">
-                <h3 className="font-medium text-gray-900 truncate">{clip.clipName}</h3>
+                <div className="flex items-center justify-between">
+                  <h3 className="font-medium text-gray-900 truncate flex-1">{clip.clipName}</h3>
+                  <button
+                    onClick={(e) => {
+                      e.stopPropagation();
+                      handleEnhance(clip.id);
+                    }}
+                    disabled={isEnhancing}
+                    className="ml-2 px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded-md hover:bg-purple-200 transition-colors disabled:opacity-50 flex items-center gap-1 flex-shrink-0"
+                    title="Upscale 2x + 30fps"
+                  >
+                    {enhancingCardId === clip.id ? (
+                      <div className="animate-spin rounded-full h-3 w-3 border-2 border-purple-600 border-t-transparent"></div>
+                    ) : (
+                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                      </svg>
+                    )}
+                    HQ
+                  </button>
+                </div>
                 <p className="text-xs text-gray-500 truncate mt-1">
                   {clip.prompt || 'No prompt'}
                 </p>
                 <div className="flex items-center justify-between mt-2 text-xs text-gray-400">
-                  <span>{clip.frameCount || '?'} frames</span>
+                  <span>{clip.durationSec ? `${clip.durationSec.toFixed(1)}s` : '?'}</span>
+                  <span>{resolutions[clip.id] || ''}</span>
                   <span>{new Date(clip.createdAt).toLocaleDateString('ko-KR')}</span>
                 </div>
               </div>
@@ -256,9 +408,12 @@ export function VideoGallery() {
       {selectedClip && (
         <VideoPlayerModal
           clip={selectedClip}
-          onClose={() => setSelectedClip(null)}
+          onClose={() => { setSelectedClip(null); setEnhanceResult(null); }}
           onDelete={() => handleDelete(selectedClip)}
           isDeleting={deleteClip.isPending}
+          onEnhance={handleEnhance}
+          isEnhancing={isEnhancing}
+          enhanceResult={enhanceResult}
         />
       )}
     </div>

@@ -35,6 +35,19 @@ export const interpolateQueue = new Queue('interpolateQueue', queueOptions);
 // Export queue - for final export pipeline
 export const exportQueue = new Queue('exportQueue', queueOptions);
 
+// Long video queue - for automated multi-segment video generation
+export const longVideoQueue = new Queue('longVideoQueue', {
+  ...queueOptions,
+  defaultJobOptions: {
+    ...queueOptions.defaultJobOptions,
+    attempts: 1, // No auto-retry for long jobs (segments are preserved)
+    removeOnComplete: {
+      count: 20,
+      age: 48 * 60 * 60, // 48 hours
+    },
+  },
+});
+
 // Helper to get queue by name
 export function getQueue(queueName: string): Queue | null {
   const queues: Record<string, Queue> = {
@@ -43,6 +56,7 @@ export function getQueue(queueName: string): Queue | null {
     upscaleQueue,
     interpolateQueue,
     exportQueue,
+    longVideoQueue,
   };
   return queues[queueName] || null;
 }
@@ -86,4 +100,17 @@ export interface ExportJobData {
     interpolate: { enabled: boolean; targetFps?: number };
     encode: { format?: string; quality?: string };
   };
+}
+
+export interface LongVideoJobData {
+  jobId: string;
+  projectId: string;
+  prompt: string;
+  negativePrompt?: string;
+  referenceImage?: string; // optional first frame reference
+  totalSegments: number;
+  framesPerSegment: number; // default 81
+  videoModel: string; // wan21
+  denoise?: number; // 0.7 default for I2V
+  hqEnhance: boolean; // auto-apply HQ after merge
 }

@@ -13,7 +13,8 @@
     "worker:upscale": "tsx src/workers/upscaleWorker.ts",
     "worker:interpolate": "tsx src/workers/interpolateWorker.ts",
     "worker:export": "tsx src/workers/exportWorker.ts",
-    "workers:all": "concurrently \"npm run worker\" \"npm run worker:merge\" \"npm run worker:upscale\" \"npm run worker:interpolate\" \"npm run worker:export\"",
+    "worker:longvideo": "tsx src/workers/longVideoWorker.ts",
+    "workers:all": "concurrently \"npm run worker\" \"npm run worker:merge\" \"npm run worker:upscale\" \"npm run worker:interpolate\" \"npm run worker:export\" \"npm run worker:longvideo\"",
     "test:health": "tsx scripts/checkHealth.ts",
     "test:api": "tsx scripts/testApi.ts",
     "db:reset": "prisma migrate reset --force && prisma generate"

@@ -528,8 +528,8 @@ export function buildWan21Workflow(params: TextToVideoParams): Record<string, un
   const {
     prompt,
     negativePrompt = 'blurry, low quality, distorted, deformed',
-    width = 480,
-    height = 320,
+    width = 640,
+    height = 360,
     steps = 20,
     cfg = 6.0,
     seed = Math.floor(Math.random() * 2147483647),
@@ -647,8 +647,9 @@ export function buildWan21Workflow(params: TextToVideoParams): Record<string, un
 
 /**
  * Build Wan2.1 Image-to-Video workflow
- * Loads reference image, resizes to generation resolution,
- * VAE encodes to latent, repeats for frames, then denoises with KSampler
+ * Uses native WanImageToVideo node with CLIP Vision for proper image conditioning.
+ * The start_image is resized to generation resolution via ImageScale.
+ * CLIP Vision encodes image semantics into conditioning.
  */
 export function buildWan21I2VWorkflow(params: ImageToVideoParams): Record<string, unknown> {
   resetNodeIds();
@@ -656,15 +657,14 @@ export function buildWan21I2VWorkflow(params: ImageToVideoParams): Record<string
   const {
     prompt,
     negativePrompt = 'blurry, low quality, distorted, deformed',
-    width = 480,
-    height = 320,
+    width = 640,
+    height = 360,
     steps = 20,
     cfg = 6.0,
     seed = Math.floor(Math.random() * 2147483647),
     frameCount = 81,
     fps = 16,
     referenceImage,
-    denoise = 0.7,
   } = params;
 
   const workflow: Record<string, unknown> = {};
@@ -679,13 +679,12 @@ export function buildWan21I2VWorkflow(params: ImageToVideoParams): Record<string
     },
   };
 
-  // 2. UNETLoader (Wan2.1 1.3B bf16)
+  // 2. UnetLoaderGGUF (Wan2.1 I2V 14B Q3_K_M)
   const unetLoaderId = getNodeId();
   workflow[unetLoaderId] = {
-    class_type: 'UNETLoader',
+    class_type: 'UnetLoaderGGUF',
     inputs: {
-      unet_name: 'wan2.1/wan2.1_t2v_1.3B_bf16.safetensors',
-      weight_dtype: 'default',
+      unet_name: 'wan2.1/wan2.1-i2v-14b-480p-Q3_K_M.gguf',
     },
   };
 
@@ -720,23 +719,23 @@ export function buildWan21I2VWorkflow(params: ImageToVideoParams): Record<string
     },
   };
 
-  // 6. VAE Encode image to latent
-  const vaeEncodeId = getNodeId();
-  workflow[vaeEncodeId] = {
-    class_type: 'VAEEncode',
+  // 6. CLIPVisionLoader (for image semantic encoding)
+  const clipVisionLoaderId = getNodeId();
+  workflow[clipVisionLoaderId] = {
+    class_type: 'CLIPVisionLoader',
     inputs: {
-      pixels: [imageScaleId, 0],
-      vae: [vaeLoaderId, 0],
+      clip_name: 'CLIP-ViT-H-14-laion2B-s32B-b79K.safetensors',
     },
   };
 
-  // 7. Repeat latent for all frames
-  const repeatLatentId = getNodeId();
-  workflow[repeatLatentId] = {
-    class_type: 'RepeatLatentBatch',
+  // 7. CLIPVisionEncode (encode reference image)
+  const clipVisionEncodeId = getNodeId();
+  workflow[clipVisionEncodeId] = {
+    class_type: 'CLIPVisionEncode',
     inputs: {
-      samples: [vaeEncodeId, 0],
-      amount: frameCount,
+      clip_vision: [clipVisionLoaderId, 0],
+      image: [imageScaleId, 0],
+      crop: 'center',
     },
   };
 
@@ -760,25 +759,43 @@ export function buildWan21I2VWorkflow(params: ImageToVideoParams): Record<string
     },
   };
 
-  // 10. KSampler - denoise < 1.0 preserves reference image
+  // 10. WanImageToVideo - native I2V conditioning with start_image + CLIP Vision
+  // Outputs: [positive_cond, negative_cond, latent]
+  const wanI2VId = getNodeId();
+  workflow[wanI2VId] = {
+    class_type: 'WanImageToVideo',
+    inputs: {
+      positive: [positiveClipId, 0],
+      negative: [negativeClipId, 0],
+      vae: [vaeLoaderId, 0],
+      width,
+      height,
+      length: frameCount,
+      batch_size: 1,
+      clip_vision_output: [clipVisionEncodeId, 0],
+      start_image: [imageScaleId, 0],
+    },
+  };
+
+  // 11. KSampler
   const samplerId = getNodeId();
   workflow[samplerId] = {
     class_type: 'KSampler',
     inputs: {
       model: [unetLoaderId, 0],
-      positive: [positiveClipId, 0],
-      negative: [negativeClipId, 0],
-      latent_image: [repeatLatentId, 0],
+      positive: [wanI2VId, 0],
+      negative: [wanI2VId, 1],
+      latent_image: [wanI2VId, 2],
       seed,
       steps,
       cfg,
       sampler_name: 'euler',
       scheduler: 'normal',
-      denoise,
+      denoise: 1,
     },
   };
 
-  // 11. VAE Decode
+  // 12. VAE Decode
   const vaeDecodeId = getNodeId();
   workflow[vaeDecodeId] = {
     class_type: 'VAEDecode',
@@ -788,7 +805,7 @@ export function buildWan21I2VWorkflow(params: ImageToVideoParams): Record<string
     },
   };
 
-  // 12. VHS Video Combine
+  // 13. VHS Video Combine
   const videoCombineId = getNodeId();
   workflow[videoCombineId] = {
     class_type: 'VHS_VideoCombine',

@@ -43,13 +43,15 @@ services:
       timeout: 5s
       retries: 5
 
-  # Next.js Application
+  # Next.js Application (use 'docker compose --profile app up' to start)
   app:
     build:
       context: ./video-generator
       dockerfile: Dockerfile
     container_name: videogen-app
     restart: unless-stopped
+    profiles:
+      - app
     ports:
       - "3000:3000"
     environment:
@@ -82,13 +84,15 @@ services:
               count: 1
               capabilities: [gpu]
 
-  # BullMQ Worker Process
+  # BullMQ Worker Process (use 'docker compose --profile worker up' to start)
   worker:
     build:
       context: ./video-generator
       dockerfile: Dockerfile
     container_name: videogen-worker
     restart: unless-stopped
+    profiles:
+      - worker
     command: npm run worker
     environment:
       - NODE_ENV=development

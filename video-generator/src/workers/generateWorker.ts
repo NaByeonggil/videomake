@@ -165,13 +165,13 @@ async function processGenerateJob(job: Job<GenerateJobData>): Promise<void> {
     let workflow: Record<string, unknown>;
 
     if (videoModel === 'wan21' && settings.generationType === 'imageToVideo' && clip.referenceImage) {
-      // Wan2.1 1.3B Image to Video
-      // Image is resized to 480x320 inside the workflow (ImageScale node)
+      // Wan2.1 14B Image to Video
+      // 640x360 (16:9) → HQ 2x = 1280x720 (exact 720p)
       workflow = buildWan21I2VWorkflow({
         prompt: clip.prompt || '',
         negativePrompt: clip.negativePrompt || undefined,
-        width: 480,
-        height: 320,
+        width: 640,
+        height: 360,
         steps: clip.stepsCount || 20,
         cfg: 6.0,
         seed: clip.seedValue ? Number(clip.seedValue) : undefined,
@@ -182,12 +182,12 @@ async function processGenerateJob(job: Job<GenerateJobData>): Promise<void> {
       });
     } else if (videoModel === 'wan21') {
       // Wan2.1 1.3B Text to Video
-      // 480x320 + 81 frames fits in 12GB VRAM
+      // 640x360 (16:9) → HQ 2x = 1280x720 (exact 720p)
       workflow = buildWan21Workflow({
         prompt: clip.prompt || '',
         negativePrompt: clip.negativePrompt || undefined,
-        width: 480,
-        height: 320,
+        width: 640,
+        height: 360,
         steps: clip.stepsCount || 20,
         cfg: 6.0,
         seed: clip.seedValue ? Number(clip.seedValue) : undefined,
@@ -306,7 +306,7 @@ async function processGenerateJob(job: Job<GenerateJobData>): Promise<void> {
           });
         }
       },
-      600000 // 10 minute timeout
+      1800000 // 30 minute timeout
     );
 
     await addJobLog(jobId, 'info', 'ComfyUI execution completed');
@@ -394,6 +394,19 @@ async function processGenerateJob(job: Job<GenerateJobData>): Promise<void> {
 
     console.log(`[GenerateWorker] Job ${jobId} completed successfully`);
 
+    // Free VRAM after generation to release GPU memory
+    try {
+      const comfyuiUrl = process.env.COMFYUI_URL || 'http://localhost:8188';
+      await fetch(`${comfyuiUrl}/free`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ unload_models: true, free_memory: true }),
+      });
+      console.log(`[GenerateWorker] VRAM freed after generation`);
+    } catch {
+      console.warn(`[GenerateWorker] Failed to free VRAM (non-fatal)`);
+    }
+
   } catch (error) {
     const errorMessage = error instanceof Error ? error.message : 'Unknown error';
     console.error(`[GenerateWorker] Job ${jobId} failed:`, errorMessage);
@@ -425,6 +438,16 @@ async function processGenerateJob(job: Job<GenerateJobData>): Promise<void> {
         timestamp: new Date().toISOString(),
       })
     );
+
+    // Free VRAM on failure too
+    try {
+      const comfyuiUrl = process.env.COMFYUI_URL || 'http://localhost:8188';
+      await fetch(`${comfyuiUrl}/free`, {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ unload_models: true, free_memory: true }),
+      });
+    } catch { /* ignore */ }
 
     throw error;
   }
