@@ -80,6 +80,8 @@ const API_BASE = '/api';
 export function ClipEditor() {
   const currentProjectId = useProjectStore((state) => state.currentProjectId);
   const projects = useProjectStore((state) => state.projects);
+  const continueFromClip = useProjectStore((state) => state.continueFromClip);
+  const setContinueFromClip = useProjectStore((state) => state.setContinueFromClip);
   const currentProject = projects.find((p) => p.id === currentProjectId);
   const generateClip = useGenerateClip();
 
@@ -162,6 +164,27 @@ export function ClipEditor() {
   const [denoise, setDenoise] = useState(0.5); // Lower = more original preserved
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
+
+  // Consume "Continue from Clip" data from store
+  useEffect(() => {
+    if (!continueFromClip) return;
+
+    // Switch to I2V mode
+    setGenerationType('imageToVideo');
+    // Set Wan2.1 14B as the I2V model
+    setVideoModel('wan21');
+    applyModelDefaults('wan21', 'imageToVideo');
+    // Set the extracted frame as reference image
+    setReferenceImage(continueFromClip.filename);
+    setImagePreview(continueFromClip.preview);
+    // Pre-fill prompt from original clip
+    if (continueFromClip.prompt) {
+      setPrompt(continueFromClip.prompt);
+    }
+    // Clear store so it doesn't re-trigger
+    setContinueFromClip(null);
+    // eslint-disable-next-line react-hooks/exhaustive-deps
+  }, [continueFromClip, setContinueFromClip]);
 
   // Resolution options for current model
   const resolutionOptions = MODEL_RESOLUTIONS[videoModel] || MODEL_RESOLUTIONS['animateDiff'];

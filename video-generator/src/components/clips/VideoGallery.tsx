@@ -11,6 +11,12 @@ import { toStorageUrl } from '@/lib/fileNaming';
 import { Modal } from '@/components/common/Modal';
 import { useQueryClient } from '@tanstack/react-query';
 
+const ContinueIcon = () => (
+  <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+    <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+  </svg>
+);
+
 interface VideoPlayerModalProps {
   clip: Clip;
   onClose: () => void;
@@ -19,6 +25,8 @@ interface VideoPlayerModalProps {
   onEnhance: (clipId: string) => void;
   isEnhancing: boolean;
   enhanceResult: EnhanceResult | null;
+  onContinue: (clip: Clip) => void;
+  isContinuing: boolean;
 }
 
 interface EnhanceResult {
@@ -29,7 +37,7 @@ interface EnhanceResult {
   size: string;
 }
 
-function VideoPlayerModal({ clip, onClose, onDelete, isDeleting, onEnhance, isEnhancing, enhanceResult }: VideoPlayerModalProps) {
+function VideoPlayerModal({ clip, onClose, onDelete, isDeleting, onEnhance, isEnhancing, enhanceResult, onContinue, isContinuing }: VideoPlayerModalProps) {
   const videoUrl = clip.filePath
     ? toStorageUrl(clip.filePath)
     : null;
@@ -128,7 +136,7 @@ function VideoPlayerModal({ clip, onClose, onDelete, isDeleting, onEnhance, isEn
 
           <button
             onClick={() => onEnhance(clip.id)}
-            disabled={isEnhancing || isDeleting}
+            disabled={isEnhancing || isDeleting || isContinuing}
             className="inline-flex items-center px-3 py-2 bg-purple-600 text-white rounded-lg hover:bg-purple-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
           >
             {isEnhancing ? (
@@ -142,6 +150,26 @@ function VideoPlayerModal({ clip, onClose, onDelete, isDeleting, onEnhance, isEn
                   <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
                 </svg>
                 HQ Enhance
+              </>
+            )}
+          </button>
+
+          <button
+            onClick={() => onContinue(clip)}
+            disabled={isContinuing || isEnhancing || isDeleting}
+            className="inline-flex items-center px-3 py-2 bg-green-600 text-white rounded-lg hover:bg-green-700 transition-colors disabled:opacity-50 disabled:cursor-not-allowed text-sm"
+          >
+            {isContinuing ? (
+              <>
+                <div className="animate-spin rounded-full h-4 w-4 border-2 border-white border-t-transparent mr-1.5"></div>
+                추출 중...
+              </>
+            ) : (
+              <>
+                <svg className="w-4 h-4 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                  <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 5l7 7-7 7M5 5l7 7-7 7" />
+                </svg>
+                이어서 생성
               </>
             )}
           </button>
@@ -166,6 +194,7 @@ function VideoPlayerModal({ clip, onClose, onDelete, isDeleting, onEnhance, isEn
 
 export function VideoGallery() {
   const { currentProjectId, clips } = useProjectStore();
+  const setContinueFromClip = useProjectStore((s) => s.setContinueFromClip);
   const { isLoading } = useClips(currentProjectId);
   const deleteClip = useDeleteClip();
   const queryClient = useQueryClient();
@@ -173,6 +202,7 @@ export function VideoGallery() {
   const [isEnhancing, setIsEnhancing] = useState(false);
   const [enhanceResult, setEnhanceResult] = useState<EnhanceResult | null>(null);
   const [enhancingCardId, setEnhancingCardId] = useState<string | null>(null);
+  const [continuingClipId, setContinuingClipId] = useState<string | null>(null);
   const [resolutions, setResolutions] = useState<Record<string, string>>({});
   const [enhanceProgress, setEnhanceProgress] = useState(0);
   const progressIntervalRef = useRef<NodeJS.Timeout | null>(null);
@@ -240,6 +270,34 @@ export function VideoGallery() {
       alert('Failed to delete clip');
     }
   };
+
+  const handleContinueFromClip = useCallback(async (clip: Clip, e?: React.MouseEvent) => {
+    if (e) e.stopPropagation();
+    if (continuingClipId) return;
+
+    setContinuingClipId(clip.id);
+    try {
+      const res = await fetch(`/api/clips/${clip.id}/extract-frame`, {
+        method: 'POST',
+      });
+      const json = await res.json();
+      if (json.success) {
+        setContinueFromClip({
+          filename: json.data.filename,
+          preview: json.data.preview,
+          prompt: json.data.sourcePrompt,
+          clipId: clip.id,
+        });
+        setSelectedClip(null);
+      } else {
+        alert(`Frame extraction failed: ${json.error}`);
+      }
+    } catch {
+      alert('Failed to extract frame from clip');
+    } finally {
+      setContinuingClipId(null);
+    }
+  }, [continuingClipId, setContinueFromClip]);
 
   // Filter clips that have video files
   const completedClips = clips.filter(
@@ -371,24 +429,39 @@ export function VideoGallery() {
               <div className="p-3">
                 <div className="flex items-center justify-between">
                   <h3 className="font-medium text-gray-900 truncate flex-1">{clip.clipName}</h3>
-                  <button
-                    onClick={(e) => {
-                      e.stopPropagation();
-                      handleEnhance(clip.id);
-                    }}
-                    disabled={isEnhancing}
-                    className="ml-2 px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded-md hover:bg-purple-200 transition-colors disabled:opacity-50 flex items-center gap-1 flex-shrink-0"
-                    title="Upscale 2x + 30fps"
-                  >
-                    {enhancingCardId === clip.id ? (
-                      <div className="animate-spin rounded-full h-3 w-3 border-2 border-purple-600 border-t-transparent"></div>
-                    ) : (
-                      <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
-                        <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
-                      </svg>
-                    )}
-                    HQ
-                  </button>
+                  <div className="flex items-center gap-1 ml-2 flex-shrink-0">
+                    <button
+                      onClick={(e) => handleContinueFromClip(clip, e)}
+                      disabled={!!continuingClipId}
+                      className="px-2 py-1 text-xs bg-green-100 text-green-700 rounded-md hover:bg-green-200 transition-colors disabled:opacity-50 flex items-center gap-1"
+                      title="이어서 생성 (Continue from last frame)"
+                    >
+                      {continuingClipId === clip.id ? (
+                        <div className="animate-spin rounded-full h-3 w-3 border-2 border-green-600 border-t-transparent"></div>
+                      ) : (
+                        <ContinueIcon />
+                      )}
+                      이어서
+                    </button>
+                    <button
+                      onClick={(e) => {
+                        e.stopPropagation();
+                        handleEnhance(clip.id);
+                      }}
+                      disabled={isEnhancing}
+                      className="px-2 py-1 text-xs bg-purple-100 text-purple-700 rounded-md hover:bg-purple-200 transition-colors disabled:opacity-50 flex items-center gap-1"
+                      title="Upscale 2x + 30fps"
+                    >
+                      {enhancingCardId === clip.id ? (
+                        <div className="animate-spin rounded-full h-3 w-3 border-2 border-purple-600 border-t-transparent"></div>
+                      ) : (
+                        <svg className="w-3 h-3" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+                          <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M13 10V3L4 14h7v7l9-11h-7z" />
+                        </svg>
+                      )}
+                      HQ
+                    </button>
+                  </div>
                 </div>
                 <p className="text-xs text-gray-500 truncate mt-1">
                   {clip.prompt || 'No prompt'}
@@ -414,6 +487,8 @@ export function VideoGallery() {
           onEnhance={handleEnhance}
           isEnhancing={isEnhancing}
           enhanceResult={enhanceResult}
+          onContinue={(clip) => handleContinueFromClip(clip)}
+          isContinuing={!!continuingClipId}
         />
       )}
     </div>

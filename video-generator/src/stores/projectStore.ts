@@ -51,6 +51,13 @@ export interface Job {
   createdAt: string;
 }
 
+export interface ContinueFromClipData {
+  filename: string;
+  preview: string;
+  prompt: string | null;
+  clipId: string;
+}
+
 interface ProjectState {
   // Current selections
   currentProjectId: string | null;
@@ -64,6 +71,7 @@ interface ProjectState {
   // UI state
   isLoading: boolean;
   error: string | null;
+  continueFromClip: ContinueFromClipData | null;
 
   // Actions
   setCurrentProject: (id: string | null) => void;
@@ -79,6 +87,7 @@ interface ProjectState {
   removeJob: (id: string) => void;
   setLoading: (loading: boolean) => void;
   setError: (error: string | null) => void;
+  setContinueFromClip: (data: ContinueFromClipData | null) => void;
   reset: () => void;
 }
 
@@ -90,6 +99,7 @@ const initialState = {
   activeJobs: [],
   isLoading: false,
   error: null,
+  continueFromClip: null,
 };
 
 export const useProjectStore = create<ProjectState>((set) => ({
@@ -146,6 +156,8 @@ export const useProjectStore = create<ProjectState>((set) => ({
   setLoading: (isLoading) => set({ isLoading }),
 
   setError: (error) => set({ error }),
+
+  setContinueFromClip: (data) => set({ continueFromClip: data }),
 
   reset: () => set(initialState),
 }));
