@@ -193,6 +193,8 @@ export function ClipEditor() {
   const [longVideoProgress, setLongVideoProgress] = useState(0);
   const [longVideoMessage, setLongVideoMessage] = useState('');
   const [longVideoSegment, setLongVideoSegment] = useState<{ current: number; total: number } | null>(null);
+  const [longVideoStartTime, setLongVideoStartTime] = useState<number | null>(null);
+  const [longVideoSegTimestamps, setLongVideoSegTimestamps] = useState<number[]>([]); // timestamps when each segment completed
 
   const SECONDS_PER_SEGMENT = 5.0625;
   const longVideoSegments = Math.ceil(longVideoDuration / SECONDS_PER_SEGMENT);
@@ -280,6 +282,8 @@ export function ClipEditor() {
   useEffect(() => {
     if (!longVideoJobId) return;
 
+    let lastCompletedSeg = 0;
+
     const pollInterval = setInterval(async () => {
       try {
         const res = await fetch(`${API_BASE}/jobs/${longVideoJobId}`);
@@ -291,8 +295,53 @@ export function ClipEditor() {
             setLongVideoProgress(job.progressPercent);
           }
 
+          // Parse logs to find completed segments and current segment
+          const logs: Array<{ logMessage: string }> = job.logs || [];
+          const settings = job.jobSettings || {};
+          const total = settings.totalSegments || 6;
+
+          // Count completed segments from logs
+          let completedSegs = 0;
+          let currentSeg = 0;
+          for (const log of logs) {
+            const completedMatch = log.logMessage.match(/Segment (\d+)\/\d+ completed/);
+            if (completedMatch) {
+              completedSegs = Math.max(completedSegs, parseInt(completedMatch[1]));
+            }
+            const i2vMatch = log.logMessage.match(/Segment (\d+): I2V/);
+            if (i2vMatch) {
+              currentSeg = Math.max(currentSeg, parseInt(i2vMatch[1]));
+            }
+          }
+
+          if (currentSeg > 0) {
+            setLongVideoSegment({ current: currentSeg, total });
+          }
+
+          // Track segment completion timestamps for ETA
+          if (completedSegs > lastCompletedSeg) {
+            lastCompletedSeg = completedSegs;
+            setLongVideoSegTimestamps(prev => {
+              const updated = [...prev];
+              while (updated.length < completedSegs) {
+                updated.push(Date.now());
+              }
+              return updated;
+            });
+          }
+
           if (job.jobStatus === 'processing') {
-            setLongVideoMessage(job.errorMessage || `Processing... ${job.progressPercent}%`);
+            // Build progress message with segment info
+            const phase = logs[0]?.logMessage || '';
+            if (phase.includes('Merging')) {
+              setLongVideoMessage(`Merging ${total} clips...`);
+            } else if (phase.includes('HQ')) {
+              setLongVideoMessage('HQ Enhancing to 720p 30fps...');
+            } else if (phase.includes('Initial frame')) {
+              setLongVideoMessage('Generating initial reference frame...');
+            } else {
+              setLongVideoMessage(`Segment ${currentSeg}/${total} generating...`);
+            }
           } else if (job.jobStatus === 'completed') {
             setLongVideoMessage('Long video completed!');
             setLongVideoProgress(100);
@@ -302,6 +351,8 @@ export function ClipEditor() {
               setLongVideoProgress(0);
               setLongVideoMessage('');
               setLongVideoSegment(null);
+              setLongVideoStartTime(null);
+              setLongVideoSegTimestamps([]);
               setShowLongVideo(false);
             }, 3000);
             clearInterval(pollInterval);
@@ -313,6 +364,8 @@ export function ClipEditor() {
               setLongVideoProgress(0);
               setLongVideoMessage('');
               setLongVideoSegment(null);
+              setLongVideoStartTime(null);
+              setLongVideoSegTimestamps([]);
             }, 5000);
             clearInterval(pollInterval);
           }
@@ -375,6 +428,8 @@ export function ClipEditor() {
     setIsLongVideoGenerating(true);
     setLongVideoProgress(0);
     setLongVideoMessage('Preparing long video...');
+    setLongVideoStartTime(Date.now());
+    setLongVideoSegTimestamps([]);
 
     // Auto-translate Korean
     let finalPrompt = prompt.trim();
@@ -1007,28 +1062,109 @@ export function ClipEditor() {
               </label>
 
               {/* Long video progress */}
-              {isLongVideoGenerating && (
-                <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg p-3 border border-indigo-200">
-                  <div className="flex items-center gap-2 mb-2">
-                    <div className="animate-spin rounded-full h-4 w-4 border-2 border-indigo-600 border-t-transparent"></div>
-                    <span className="font-medium text-indigo-800 text-sm">
-                      {longVideoSegment
-                        ? `Segment ${longVideoSegment.current}/${longVideoSegment.total}`
-                        : 'Starting...'}
-                    </span>
+              {isLongVideoGenerating && (() => {
+                const seg = longVideoSegment;
+                const completedSegs = longVideoSegTimestamps.length;
+                const totalSegs = seg?.total || longVideoSegments;
+
+                // Calculate ETA based on average segment time
+                let etaText = '';
+                if (longVideoStartTime && completedSegs > 0) {
+                  const elapsed = (Date.now() - longVideoStartTime) / 1000; // seconds
+                  const avgPerSeg = elapsed / completedSegs;
+                  const remaining = (totalSegs - completedSegs) * avgPerSeg;
+                  if (remaining > 3600) {
+                    etaText = `~${(remaining / 3600).toFixed(1)}h remaining`;
+                  } else if (remaining > 60) {
+                    etaText = `~${Math.round(remaining / 60)}m remaining`;
+                  } else {
+                    etaText = `~${Math.round(remaining)}s remaining`;
+                  }
+                } else if (longVideoStartTime) {
+                  const estTotal = totalSegs * 10 * 60; // ~10min per segment
+                  const elapsed = (Date.now() - longVideoStartTime) / 1000;
+                  const remaining = Math.max(0, estTotal - elapsed);
+                  etaText = `~${Math.round(remaining / 60)}m remaining (est.)`;
+                }
+
+                // Elapsed time
+                let elapsedText = '';
+                if (longVideoStartTime) {
+                  const elapsed = Math.floor((Date.now() - longVideoStartTime) / 1000);
+                  const mins = Math.floor(elapsed / 60);
+                  const secs = elapsed % 60;
+                  elapsedText = `${mins}:${String(secs).padStart(2, '0')} elapsed`;
+                }
+
+                return (
+                  <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg p-3 border border-indigo-200 space-y-2">
+                    {/* Header */}
+                    <div className="flex items-center justify-between">
+                      <div className="flex items-center gap-2">
+                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-indigo-600 border-t-transparent"></div>
+                        <span className="font-medium text-indigo-800 text-sm">
+                          {seg ? `Segment ${seg.current}/${seg.total}` : 'Initializing...'}
+                        </span>
+                      </div>
+                      {etaText && (
+                        <span className="text-xs text-indigo-600 font-medium">{etaText}</span>
+                      )}
+                    </div>
+
+                    {/* Segment progress grid */}
+                    {seg && (
+                      <div className="flex gap-1">
+                        {Array.from({ length: totalSegs }, (_, i) => {
+                          const segNum = i + 1;
+                          const isCompleted = segNum <= completedSegs;
+                          const isCurrent = segNum === seg.current;
+                          return (
+                            <div
+                              key={i}
+                              className={`h-2 flex-1 rounded-full transition-all duration-500 ${
+                                isCompleted
+                                  ? 'bg-indigo-600'
+                                  : isCurrent
+                                    ? 'bg-indigo-400 animate-pulse'
+                                    : 'bg-indigo-200'
+                              }`}
+                              title={`Seg ${segNum}${isCompleted ? ' (done)' : isCurrent ? ' (generating)' : ''}`}
+                            />
+                          );
+                        })}
+                      </div>
+                    )}
+
+                    {/* Overall progress bar */}
+                    <div className="w-full bg-indigo-200 rounded-full h-2.5 overflow-hidden">
+                      <div
+                        className="bg-indigo-600 h-2.5 rounded-full transition-all duration-500"
+                        style={{ width: `${longVideoProgress}%` }}
+                      ></div>
+                    </div>
+
+                    {/* Status line */}
+                    <div className="flex justify-between text-xs">
+                      <span className="text-indigo-700">{longVideoMessage}</span>
+                      <div className="flex gap-3 text-indigo-600">
+                        {elapsedText && <span>{elapsedText}</span>}
+                        <span className="font-medium">{longVideoProgress}%</span>
+                      </div>
+                    </div>
+
+                    {/* Completed segments detail */}
+                    {completedSegs > 0 && (
+                      <div className="text-xs text-indigo-600">
+                        {completedSegs}/{totalSegs} segments done
+                        {completedSegs > 0 && longVideoStartTime && (() => {
+                          const avg = ((Date.now() - longVideoStartTime) / 1000 / completedSegs);
+                          return ` (avg ${Math.round(avg / 60)}m/seg)`;
+                        })()}
+                      </div>
+                    )}
                   </div>
-                  <div className="w-full bg-indigo-200 rounded-full h-3 overflow-hidden">
-                    <div
-                      className="bg-indigo-600 h-3 rounded-full transition-all duration-500"
-                      style={{ width: `${longVideoProgress}%` }}
-                    ></div>
-                  </div>
-                  <div className="mt-1.5 flex justify-between text-xs">
-                    <span className="text-indigo-700">{longVideoMessage}</span>
-                    <span className="font-medium text-indigo-800">{longVideoProgress}%</span>
-                  </div>
-                </div>
-              )}
+                );
+              })()}
 
               {/* Start / Cancel button */}
               {isLongVideoGenerating ? (

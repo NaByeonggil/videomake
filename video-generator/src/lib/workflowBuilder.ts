@@ -824,6 +824,87 @@ export function buildWan21I2VWorkflow(params: ImageToVideoParams): Record<string
 }
 
 /**
+ * Build SD 1.5 Text-to-Image workflow (single image generation)
+ * Used to generate initial reference frame for I2V-only pipelines
+ */
+export function buildSD15TextToImageWorkflow(params: {
+  prompt: string;
+  negativePrompt?: string;
+  width?: number;
+  height?: number;
+  steps?: number;
+  cfg?: number;
+  seed?: number;
+}): Record<string, unknown> {
+  resetNodeIds();
+
+  const {
+    prompt,
+    negativePrompt = 'blurry, low quality, distorted, deformed',
+    width = 640,
+    height = 360,
+    steps = 25,
+    cfg = 7.5,
+    seed = Math.floor(Math.random() * 2147483647),
+  } = params;
+
+  const workflow: Record<string, unknown> = {};
+
+  const checkpointId = getNodeId();
+  workflow[checkpointId] = {
+    class_type: 'CheckpointLoaderSimple',
+    inputs: { ckpt_name: 'v1-5-pruned-emaonly.safetensors' },
+  };
+
+  const positiveId = getNodeId();
+  workflow[positiveId] = {
+    class_type: 'CLIPTextEncode',
+    inputs: { text: prompt, clip: [checkpointId, 1] },
+  };
+
+  const negativeId = getNodeId();
+  workflow[negativeId] = {
+    class_type: 'CLIPTextEncode',
+    inputs: { text: negativePrompt, clip: [checkpointId, 1] },
+  };
+
+  const latentId = getNodeId();
+  workflow[latentId] = {
+    class_type: 'EmptyLatentImage',
+    inputs: { width, height, batch_size: 1 },
+  };
+
+  const samplerId = getNodeId();
+  workflow[samplerId] = {
+    class_type: 'KSampler',
+    inputs: {
+      model: [checkpointId, 0],
+      positive: [positiveId, 0],
+      negative: [negativeId, 0],
+      latent_image: [latentId, 0],
+      seed, steps, cfg,
+      sampler_name: 'euler_ancestral',
+      scheduler: 'normal',
+      denoise: 1,
+    },
+  };
+
+  const decodeId = getNodeId();
+  workflow[decodeId] = {
+    class_type: 'VAEDecode',
+    inputs: { samples: [samplerId, 0], vae: [checkpointId, 2] },
+  };
+
+  const saveId = getNodeId();
+  workflow[saveId] = {
+    class_type: 'SaveImage',
+    inputs: { images: [decodeId, 0], filename_prefix: 'T2I_InitFrame' },
+  };
+
+  return workflow;
+}
+
+/**
  * Check if a video model is available
  */
 export function isModelAvailable(model: VideoModel): boolean {

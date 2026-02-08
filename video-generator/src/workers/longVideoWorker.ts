@@ -13,8 +13,8 @@ import { execSync } from 'child_process';
 import Redis from 'ioredis';
 import { ComfyUIClient } from '../lib/comfyuiClient';
 import {
-  buildWan21Workflow,
   buildWan21I2VWorkflow,
+  buildSD15TextToImageWorkflow,
   getOutputVideoFromResult,
 } from '../lib/workflowBuilder';
 import { generateFileName, getStoragePath } from '../lib/fileNaming';
@@ -113,12 +113,55 @@ async function processLongVideo(job: Job<LongVideoJobData>): Promise<void> {
     const clipIds: string[] = [];
     let currentReferenceImage = referenceImage || null;
 
-    // Generate segments sequentially
+    // If no reference image, generate initial frame via SD 1.5 T2I
+    if (!currentReferenceImage) {
+      await publishProgress(jobId, {
+        percent: 1,
+        message: 'Generating initial reference frame (SD 1.5 T2I)...',
+        segment: 0,
+        totalSegments,
+      });
+      await freeVram();
+      await addJobLog(jobId, 'info', 'Generating initial reference frame via SD 1.5 T2I');
+
+      const t2iWorkflow = buildSD15TextToImageWorkflow({
+        prompt,
+        negativePrompt: negativePrompt || undefined,
+        width: 640,
+        height: 360,
+        steps: 25,
+        cfg: 7.5,
+      });
+
+      const t2iResult = await comfyui.executeWorkflow(t2iWorkflow, undefined, 300000);
+
+      // Extract image from SaveImage output
+      let initImageFilename: string | null = null;
+      for (const nodeOutput of Object.values(t2iResult.outputs)) {
+        const out = nodeOutput as { images?: Array<{ filename: string; subfolder: string; type: string }> };
+        if (out.images && out.images.length > 0) {
+          initImageFilename = out.images[0].filename;
+          break;
+        }
+      }
+      if (!initImageFilename) {
+        throw new Error('Failed to generate initial reference frame');
+      }
+
+      // Download and re-upload to ensure it's in input folder
+      const initBuffer = await comfyui.getOutputFile(initImageFilename, '', 'output');
+      const uploadResult = await comfyui.uploadImage(initBuffer, 'longvideo_init_frame.jpg');
+      currentReferenceImage = uploadResult.name;
+
+      await addJobLog(jobId, 'info', `Initial frame generated and uploaded as ${currentReferenceImage}`);
+    }
+
+    // Generate ALL segments using I2V (Wan2.1 14B)
     for (let seg = 1; seg <= totalSegments; seg++) {
-      const segPercent = Math.floor(((seg - 1) / totalSegments) * 85);
+      const segPercent = Math.floor(((seg - 1) / totalSegments) * 85) + 3;
       await publishProgress(jobId, {
         percent: segPercent,
-        message: `Generating segment ${seg}/${totalSegments}...`,
+        message: `Generating segment ${seg}/${totalSegments} (I2V 14B)...`,
         segment: seg,
         totalSegments,
       });
@@ -131,41 +174,22 @@ async function processLongVideo(job: Job<LongVideoJobData>): Promise<void> {
       await freeVram();
       await addJobLog(jobId, 'info', `Segment ${seg}/${totalSegments}: VRAM freed`);
 
-      // 2. Build workflow
-      let workflow: Record<string, unknown>;
+      // 2. Build I2V workflow (always Wan2.1 14B)
       const seed = Math.floor(Math.random() * 2147483647);
-
-      if (currentReferenceImage) {
-        // I2V: use Wan2.1 14B for segments with reference
-        workflow = buildWan21I2VWorkflow({
-          prompt,
-          negativePrompt: negativePrompt || undefined,
-          width: 640,
-          height: 360,
-          steps: 25,
-          cfg: 6.0,
-          seed,
-          frameCount: framesPerSegment,
-          fps: 16,
-          referenceImage: currentReferenceImage,
-          denoise: denoise ?? 0.7,
-        });
-        await addJobLog(jobId, 'info', `Segment ${seg}: I2V workflow (ref: ${currentReferenceImage})`);
-      } else {
-        // T2V: use Wan2.1 1.3B for first segment without reference
-        workflow = buildWan21Workflow({
-          prompt,
-          negativePrompt: negativePrompt || undefined,
-          width: 640,
-          height: 360,
-          steps: 20,
-          cfg: 6.0,
-          seed,
-          frameCount: framesPerSegment,
-          fps: 16,
-        });
-        await addJobLog(jobId, 'info', `Segment ${seg}: T2V workflow`);
-      }
+      const workflow = buildWan21I2VWorkflow({
+        prompt,
+        negativePrompt: negativePrompt || undefined,
+        width: 640,
+        height: 360,
+        steps: 25,
+        cfg: 6.0,
+        seed,
+        frameCount: framesPerSegment,
+        fps: 16,
+        referenceImage: currentReferenceImage!,
+        denoise: denoise ?? 0.7,
+      });
+      await addJobLog(jobId, 'info', `Segment ${seg}: I2V 14B workflow (ref: ${currentReferenceImage})`);
 
       // 3. Execute workflow
       const result = await comfyui.executeWorkflow(
@@ -214,7 +238,7 @@ async function processLongVideo(job: Job<LongVideoJobData>): Promise<void> {
           prompt,
           negativePrompt: negativePrompt || '',
           seedValue: BigInt(seed),
-          stepsCount: currentReferenceImage ? 25 : 20,
+          stepsCount: 25,
           cfgScale: 6.0,
           referenceImage: currentReferenceImage,
           fileName: segFileName,
