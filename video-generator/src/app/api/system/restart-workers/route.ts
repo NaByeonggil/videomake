@@ -1,6 +1,7 @@
 /**
  * Restart Workers API
  * Kills all existing worker processes and spawns fresh ones.
+ * Waits for ComfyUI to be available before starting workers.
  */
 
 import { NextResponse } from 'next/server';
@@ -12,10 +13,20 @@ export const dynamic = 'force-dynamic';
 const execAsync = promisify(exec);
 
 const WORKER_DIR = process.env.WORKER_DIR || '/home/n1/Desktop/videomake/video-generator';
+const COMFYUI_URL = process.env.COMFYUI_URL || 'http://localhost:8188';
+
+async function isComfyUIReady(): Promise<boolean> {
+  try {
+    const res = await fetch(`${COMFYUI_URL}/system_stats`, { signal: AbortSignal.timeout(3000) });
+    return res.ok;
+  } catch {
+    return false;
+  }
+}
 
 export async function POST() {
   try {
-    // Kill all existing worker processes
+    // 1. Kill all existing worker processes
     try {
       await execAsync('pkill -f "workers:all" 2>/dev/null; sleep 0.5');
     } catch { /* no processes to kill */ }
@@ -28,7 +39,10 @@ export async function POST() {
       await execAsync('pkill -9 -f "generateWorker|longVideoWorker|mergeWorker|exportWorker|upscaleWorker|interpolateWorker" 2>/dev/null; sleep 0.5');
     } catch { /* none remaining */ }
 
-    // Start fresh workers in background
+    // 2. Check ComfyUI availability before starting workers
+    const comfyReady = await isComfyUIReady();
+
+    // 3. Start fresh workers in background
     const cmd = `cd "${WORKER_DIR}" && npm run workers:all > /tmp/workers.log 2>&1 &`;
     await execAsync(cmd);
 
@@ -40,8 +54,9 @@ export async function POST() {
 
     return NextResponse.json({
       success: true,
-      message: `Workers restarted (${workerCount} active)`,
+      message: `Workers restarted (${workerCount} active)${comfyReady ? '' : ' - ComfyUI not ready!'}`,
       workerCount,
+      comfyReady,
     });
   } catch (error) {
     return NextResponse.json(

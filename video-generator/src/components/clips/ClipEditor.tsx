@@ -216,7 +216,7 @@ export function ClipEditor() {
   // VRAM free state
   const { data: systemStatus } = useSystemStatus();
   const [isFreeing, setIsFreeing] = useState(false);
-  const [isRestarting, setIsRestarting] = useState(false);
+  const [restartState, setRestartState] = useState<string | null>(null); // null | 'comfyui' | 'workers' | 'all-comfyui' | 'all-workers'
 
   const handleFreeVram = async () => {
     setIsFreeing(true);
@@ -229,18 +229,58 @@ export function ClipEditor() {
     }
   };
 
+  const handleRestartComfyUI = async () => {
+    setRestartState('comfyui');
+    try {
+      const res = await fetch('/api/system/restart-comfyui', { method: 'POST' });
+      const json = await res.json();
+      if (!json.success) {
+        alert(`ComfyUI restart failed: ${json.error}`);
+      }
+    } catch {
+      alert('Failed to restart ComfyUI');
+    } finally {
+      setRestartState(null);
+    }
+  };
+
   const handleRestartWorkers = async () => {
-    setIsRestarting(true);
+    setRestartState('workers');
     try {
       const res = await fetch('/api/system/restart-workers', { method: 'POST' });
       const json = await res.json();
       if (!json.success) {
-        alert(`Restart failed: ${json.error}`);
+        alert(`Workers restart failed: ${json.error}`);
       }
     } catch {
       alert('Failed to restart workers');
     } finally {
-      setIsRestarting(false);
+      setRestartState(null);
+    }
+  };
+
+  // Restart All: ComfyUI first → wait ready → then Workers
+  const handleRestartAll = async () => {
+    setRestartState('all-comfyui');
+    try {
+      const comfyRes = await fetch('/api/system/restart-comfyui', { method: 'POST' });
+      const comfyJson = await comfyRes.json();
+      if (!comfyJson.success) {
+        alert(`ComfyUI restart failed: ${comfyJson.error}`);
+        setRestartState(null);
+        return;
+      }
+
+      setRestartState('all-workers');
+      const workerRes = await fetch('/api/system/restart-workers', { method: 'POST' });
+      const workerJson = await workerRes.json();
+      if (!workerJson.success) {
+        alert(`Workers restart failed: ${workerJson.error}`);
+      }
+    } catch {
+      alert('Failed to restart');
+    } finally {
+      setRestartState(null);
     }
   };
 
@@ -719,18 +759,34 @@ export function ClipEditor() {
                   <button
                     type="button"
                     onClick={handleFreeVram}
-                    disabled={isFreeing}
+                    disabled={isFreeing || !!restartState}
                     className="px-2 py-0.5 text-xs bg-gray-100 hover:bg-red-100 text-gray-600 hover:text-red-700 rounded border border-gray-200 hover:border-red-300 transition-colors disabled:opacity-50"
                   >
-                    {isFreeing ? 'Freeing...' : 'Free VRAM'}
+                    {isFreeing ? '...' : 'Free'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRestartComfyUI}
+                    disabled={!!restartState}
+                    className="px-2 py-0.5 text-xs bg-gray-100 hover:bg-blue-100 text-gray-600 hover:text-blue-700 rounded border border-gray-200 hover:border-blue-300 transition-colors disabled:opacity-50"
+                  >
+                    {restartState === 'comfyui' ? '...' : 'ComfyUI'}
                   </button>
                   <button
                     type="button"
                     onClick={handleRestartWorkers}
-                    disabled={isRestarting}
+                    disabled={!!restartState}
                     className="px-2 py-0.5 text-xs bg-gray-100 hover:bg-orange-100 text-gray-600 hover:text-orange-700 rounded border border-gray-200 hover:border-orange-300 transition-colors disabled:opacity-50"
                   >
-                    {isRestarting ? 'Restarting...' : 'Restart Workers'}
+                    {restartState === 'workers' ? '...' : 'Workers'}
+                  </button>
+                  <button
+                    type="button"
+                    onClick={handleRestartAll}
+                    disabled={!!restartState}
+                    className="px-2 py-0.5 text-xs bg-gray-100 hover:bg-green-100 text-gray-600 hover:text-green-700 rounded border border-gray-200 hover:border-green-300 transition-colors disabled:opacity-50"
+                  >
+                    {restartState?.startsWith('all') ? (restartState === 'all-comfyui' ? 'ComfyUI...' : 'Workers...') : 'Restart All'}
                   </button>
                 </div>
               </div>
