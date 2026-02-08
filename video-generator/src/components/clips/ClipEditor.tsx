@@ -935,18 +935,68 @@ export function ClipEditor() {
               ))}
             </div>
           </div>
-          {/* Rendering resolution info */}
-          <div className="mt-1.5 px-3 py-1.5 rounded-lg text-xs bg-green-50 border border-green-200">
-            <div className="flex items-center justify-between">
-              <span className="text-green-700 font-medium">
-                {resolution.width}x{resolution.height}
-              </span>
-              <span className="text-gray-500">
-                {frameCount}프레임 / {videoModel === 'wan21' ? 16 : (currentProject?.frameRate || 8)}fps
-                {' '}= {(frameCount / (videoModel === 'wan21' ? 16 : (currentProject?.frameRate || 8))).toFixed(1)}초
-              </span>
-            </div>
-          </div>
+          {/* Rendering resolution info + estimates */}
+          {(() => {
+            const fps = videoModel === 'wan21' ? 16 : (currentProject?.frameRate || 8);
+            const duration = frameCount / fps;
+            // Estimate generation time (seconds) based on tested benchmarks
+            const pixels = genWidth * genHeight * frameCount;
+            let genTimeSec = 0;
+            if (videoModel === 'wan21') {
+              // T2V 1.3B: ~0.13s/frame at 640x360, scales with pixels
+              // I2V 14B: based on tested data points
+              const isI2V = generationType === 'imageToVideo';
+              if (isI2V) {
+                genTimeSec = pixels * (103 / (640 * 360 * 81)); // 14B baseline
+              } else {
+                // 1.3B: 640x360x81=10.6s, 960x540x33=71s, 960x540x49=223s
+                // Use pixel-based scaling with superlinear factor for higher res
+                const baseRate = 10.6 / (640 * 360 * 81);
+                const resScale = (genWidth * genHeight) > 400000 ? 3.5 : 1.0;
+                genTimeSec = pixels * baseRate * resScale;
+              }
+            } else if (videoModel === 'hunyuan') {
+              genTimeSec = 73 * (frameCount / 16);
+            } else if (videoModel === 'cogVideoX') {
+              genTimeSec = 43 * (frameCount / 49);
+            } else if (videoModel === 'svd') {
+              genTimeSec = 24 * (frameCount / 16);
+            } else {
+              genTimeSec = frameCount * 1.5; // AnimateDiff rough estimate
+            }
+            // HQ enhance estimate: ~2-3min per 2sec clip
+            const hqTimeSec = duration * 60;
+            const hqWidth = genWidth * 2;
+            const hqHeight = genHeight * 2;
+
+            const formatTime = (s: number) => {
+              if (s >= 3600) return `~${(s / 3600).toFixed(1)}h`;
+              if (s >= 60) return `~${Math.round(s / 60)}분`;
+              return `~${Math.round(s)}초`;
+            };
+
+            return (
+              <div className="mt-1.5 px-3 py-2 rounded-lg text-xs bg-green-50 border border-green-200 space-y-1.5">
+                <div className="flex items-center justify-between">
+                  <span className="text-green-700 font-medium">
+                    {resolution.width}x{resolution.height}
+                  </span>
+                  <span className="text-gray-600 font-medium">
+                    {frameCount}프레임 / {fps}fps = {duration.toFixed(1)}초
+                  </span>
+                </div>
+                <div className="flex items-center justify-between text-gray-500">
+                  <span>생성: {formatTime(genTimeSec)}</span>
+                  <span>HQ 후: {hqWidth}x{hqHeight} 30fps ({formatTime(hqTimeSec)})</span>
+                </div>
+                {genWidth >= 960 && (
+                  <div className="text-green-600 font-medium">
+                    HQ Enhance → {hqWidth}x{hqHeight} Full HD
+                  </div>
+                )}
+              </div>
+            );
+          })()}
           {/* Model detail info */}
           {videoModel === 'wan21' && generationType === 'imageToVideo' && (
             <div className="mt-2 px-3 py-2 rounded-lg text-xs bg-purple-50 border border-purple-200">
