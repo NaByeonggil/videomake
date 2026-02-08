@@ -15,7 +15,7 @@ const execAsync = promisify(exec);
 const COMFYUI_DIR = process.env.COMFYUI_DIR || '/home/n1/Desktop/videomake/ComfyUI';
 const COMFYUI_URL = process.env.COMFYUI_URL || 'http://localhost:8188';
 
-async function waitForComfyUI(timeoutMs: number = 60000): Promise<boolean> {
+async function waitForComfyUI(timeoutMs: number = 180000): Promise<boolean> {
   const start = Date.now();
   while (Date.now() - start < timeoutMs) {
     try {
@@ -48,13 +48,13 @@ export async function POST() {
     const cmd = `cd "${COMFYUI_DIR}" && source venv/bin/activate && python main.py > /tmp/comfyui.log 2>&1 &`;
     await execAsync(`bash -c '${cmd}'`);
 
-    // 3. Wait for ComfyUI to become available (up to 60s)
-    const ready = await waitForComfyUI(60000);
+    // 3. Wait for ComfyUI to become available (up to 3min for model loading)
+    const ready = await waitForComfyUI(180000);
 
     if (!ready) {
       return NextResponse.json({
         success: false,
-        error: 'ComfyUI started but not responding within 60s. Check /tmp/comfyui.log',
+        error: 'ComfyUI started but not responding within 3min. Check /tmp/comfyui.log',
       }, { status: 504 });
     }
 
