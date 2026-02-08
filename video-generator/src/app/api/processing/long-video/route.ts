@@ -17,6 +17,8 @@ const longVideoSchema = z.object({
   videoModel: z.enum(['wan21']).default('wan21'),
   denoise: z.number().min(0).max(1).optional(),
   hqEnhance: z.boolean().default(true),
+  width: z.number().int().min(256).max(2048).optional(),
+  height: z.number().int().min(256).max(2048).optional(),
 });
 
 export async function POST(request: NextRequest) {
@@ -61,6 +63,8 @@ export async function POST(request: NextRequest) {
           denoise: validated.denoise ?? 0.7,
           hqEnhance: validated.hqEnhance,
           targetDuration: totalSegments * SECONDS_PER_SEGMENT,
+          width: validated.width,
+          height: validated.height,
         },
         outputPath,
         outputFileName: fileName,
@@ -80,6 +84,8 @@ export async function POST(request: NextRequest) {
       videoModel: validated.videoModel,
       denoise: validated.denoise ?? 0.7,
       hqEnhance: validated.hqEnhance,
+      width: validated.width,
+      height: validated.height,
     };
 
     await longVideoQueue.add('longVideo', jobData, {

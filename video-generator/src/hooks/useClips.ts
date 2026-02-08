@@ -49,6 +49,8 @@ export function useGenerateClip() {
       generationType?: 'textToVideo' | 'imageToVideo';
       videoModel?: 'animateDiff' | 'svd' | 'cogVideoX' | 'hunyuan' | 'wan21';
       frameCount?: number;
+      width?: number;
+      height?: number;
     }): Promise<{ clipId: string; jobId: string }> => {
       const res = await fetch(`${API_BASE}/clips/generateClip`, {
         method: 'POST',

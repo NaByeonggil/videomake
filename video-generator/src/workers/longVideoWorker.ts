@@ -84,7 +84,12 @@ async function processLongVideo(job: Job<LongVideoJobData>): Promise<void> {
     videoModel,
     denoise,
     hqEnhance,
+    width: jobWidth,
+    height: jobHeight,
   } = job.data;
+
+  const genWidth = jobWidth || 640;
+  const genHeight = jobHeight || 360;
 
   console.log(`[LongVideoWorker] Starting job ${jobId}: ${totalSegments} segments`);
 
@@ -127,8 +132,8 @@ async function processLongVideo(job: Job<LongVideoJobData>): Promise<void> {
       const t2iWorkflow = buildSD15TextToImageWorkflow({
         prompt,
         negativePrompt: negativePrompt || undefined,
-        width: 640,
-        height: 360,
+        width: genWidth,
+        height: genHeight,
         steps: 25,
         cfg: 7.5,
       });
@@ -179,8 +184,8 @@ async function processLongVideo(job: Job<LongVideoJobData>): Promise<void> {
       const workflow = buildWan21I2VWorkflow({
         prompt,
         negativePrompt: negativePrompt || undefined,
-        width: 640,
-        height: 360,
+        width: genWidth,
+        height: genHeight,
         steps: 25,
         cfg: 6.0,
         seed,
@@ -304,8 +309,10 @@ async function processLongVideo(job: Job<LongVideoJobData>): Promise<void> {
       const hqPath = join(hqStoragePath, hqFileName);
       await ensureDir(hqPath);
 
-      // Scale 2x (640x360 → 1280x720) + interpolate to 30fps
-      const hqCmd = `ffmpeg -y -i "${mergedPath}" -vf "scale=1280:720:flags=lanczos,minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1" -c:v libx264 -preset medium -crf 20 "${hqPath}"`;
+      // Scale 2x + interpolate to 30fps
+      const hqWidth = genWidth * 2;
+      const hqHeight = genHeight * 2;
+      const hqCmd = `ffmpeg -y -i "${mergedPath}" -vf "scale=${hqWidth}:${hqHeight}:flags=lanczos,minterpolate=fps=30:mi_mode=mci:mc_mode=aobmc:me_mode=bidir:vsbmc=1" -c:v libx264 -preset medium -crf 20 "${hqPath}"`;
       execSync(hqCmd, { stdio: 'pipe', maxBuffer: 200 * 1024 * 1024, timeout: 3600000 });
 
       finalPath = hqPath;

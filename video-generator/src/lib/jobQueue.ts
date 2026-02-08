@@ -113,4 +113,6 @@ export interface LongVideoJobData {
   videoModel: string; // wan21
   denoise?: number; // 0.7 default for I2V
   hqEnhance: boolean; // auto-apply HQ after merge
+  width?: number; // generation width (default 640)
+  height?: number; // generation height (default 360)
 }

@@ -164,14 +164,17 @@ async function processGenerateJob(job: Job<GenerateJobData>): Promise<void> {
     // Build workflow based on video model and generation type
     let workflow: Record<string, unknown>;
 
+    // Use width/height from settings if provided, otherwise use model defaults
+    const customWidth = settings.width as number | undefined;
+    const customHeight = settings.height as number | undefined;
+
     if (videoModel === 'wan21' && settings.generationType === 'imageToVideo' && clip.referenceImage) {
       // Wan2.1 14B Image to Video
-      // 640x360 (16:9) → HQ 2x = 1280x720 (exact 720p)
       workflow = buildWan21I2VWorkflow({
         prompt: clip.prompt || '',
         negativePrompt: clip.negativePrompt || undefined,
-        width: 640,
-        height: 360,
+        width: customWidth || 640,
+        height: customHeight || 360,
         steps: clip.stepsCount || 20,
         cfg: 6.0,
         seed: clip.seedValue ? Number(clip.seedValue) : undefined,
@@ -182,12 +185,11 @@ async function processGenerateJob(job: Job<GenerateJobData>): Promise<void> {
       });
     } else if (videoModel === 'wan21') {
       // Wan2.1 1.3B Text to Video
-      // 640x360 (16:9) → HQ 2x = 1280x720 (exact 720p)
       workflow = buildWan21Workflow({
         prompt: clip.prompt || '',
         negativePrompt: clip.negativePrompt || undefined,
-        width: 640,
-        height: 360,
+        width: customWidth || 640,
+        height: customHeight || 360,
         steps: clip.stepsCount || 20,
         cfg: 6.0,
         seed: clip.seedValue ? Number(clip.seedValue) : undefined,
@@ -196,12 +198,11 @@ async function processGenerateJob(job: Job<GenerateJobData>): Promise<void> {
       });
     } else if (videoModel === 'svd' && clip.referenceImage) {
       // Stable Video Diffusion (Image to Video only)
-      // 768x512 + 14 frames fits in 12GB VRAM
       workflow = buildSVDWorkflow({
         prompt: clip.prompt || '',
         referenceImage: clip.referenceImage,
-        width: 768,
-        height: 512,
+        width: customWidth || 768,
+        height: customHeight || 512,
         steps: clip.stepsCount || 20,
         cfg: 2.5,
         seed: clip.seedValue ? Number(clip.seedValue) : undefined,

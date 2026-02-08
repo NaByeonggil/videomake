@@ -27,6 +27,8 @@ const generateClipSchema = z.object({
   referenceImage: z.string().optional(),
   ipAdapterWeight: z.number().min(0).max(2).optional(),
   denoise: z.number().min(0).max(1).optional(), // 0=keep original, 1=full regeneration
+  width: z.number().int().min(256).max(2048).optional(),
+  height: z.number().int().min(256).max(2048).optional(),
 });
 
 // POST /api/clips/generateClip - Create and queue clip generation
@@ -115,6 +117,8 @@ export async function POST(request: NextRequest) {
           referenceImage: validated.referenceImage,
           ipAdapterWeight: validated.ipAdapterWeight,
           denoise: validated.denoise,
+          width: validated.width,
+          height: validated.height,
         },
         outputPath: filePath,
         outputFileName: fileName,

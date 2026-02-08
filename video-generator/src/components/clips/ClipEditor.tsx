@@ -47,6 +47,34 @@ function getActualResolution(
   return { width: w, height: h, scaled, originalWidth, originalHeight };
 }
 
+// Model-specific resolution presets (16:9)
+const MODEL_RESOLUTIONS: Record<string, Array<{ label: string; width: number; height: number; desc: string }>> = {
+  wan21: [
+    { label: '1024', width: 1024, height: 576, desc: '고화질 (느림, VRAM 많음)' },
+    { label: '720', width: 720, height: 400, desc: '중간 품질' },
+    { label: '640', width: 640, height: 360, desc: '기본 (권장)' },
+    { label: '480', width: 480, height: 272, desc: '빠른 생성 (저화질)' },
+  ],
+  animateDiff: [
+    { label: '512', width: 512, height: 512, desc: '기본 정방형' },
+    { label: '768', width: 768, height: 432, desc: '와이드 (느림)' },
+    { label: '384', width: 384, height: 384, desc: '빠른 생성' },
+  ],
+  svd: [
+    { label: '1024', width: 1024, height: 576, desc: '기본 SVD' },
+    { label: '768', width: 768, height: 512, desc: '중간' },
+    { label: '512', width: 512, height: 288, desc: '빠른 생성' },
+  ],
+  cogVideoX: [
+    { label: '720', width: 720, height: 480, desc: '기본 CogVideo' },
+    { label: '480', width: 480, height: 320, desc: '빠른 생성' },
+  ],
+  hunyuan: [
+    { label: '848', width: 848, height: 480, desc: '기본 Hunyuan' },
+    { label: '640', width: 640, height: 360, desc: '빠른 생성' },
+  ],
+};
+
 const API_BASE = '/api';
 
 export function ClipEditor() {
@@ -63,6 +91,8 @@ export function ClipEditor() {
   const [frameCount, setFrameCount] = useState(16);
   const [generationType, setGenerationType] = useState<'textToVideo' | 'imageToVideo'>('textToVideo');
   const [videoModel, setVideoModel] = useState<'animateDiff' | 'svd' | 'cogVideoX' | 'hunyuan' | 'wan21'>('animateDiff');
+  const [genWidth, setGenWidth] = useState(640);
+  const [genHeight, setGenHeight] = useState(360);
 
   // Model options per generation type
   const t2vModels = [
@@ -81,8 +111,14 @@ export function ClipEditor() {
 
   const currentModels = generationType === 'textToVideo' ? t2vModels : i2vModels;
 
-  // Apply model defaults
+  // Apply model defaults (including default resolution)
   const applyModelDefaults = (model: string, genType: string) => {
+    // Set default resolution for model
+    const resOptions = MODEL_RESOLUTIONS[model] || MODEL_RESOLUTIONS['animateDiff'];
+    const defaultRes = resOptions.find(r => r.label === '640') || resOptions[Math.floor(resOptions.length / 2)] || resOptions[0];
+    setGenWidth(defaultRes.width);
+    setGenHeight(defaultRes.height);
+
     if (model === 'wan21') {
       setFrameCount(81);
       setCfgScale(6.0);
@@ -127,10 +163,18 @@ export function ClipEditor() {
   const [isUploading, setIsUploading] = useState(false);
   const fileInputRef = useRef<HTMLInputElement>(null);
 
-  // Calculate actual rendering resolution
+  // Resolution options for current model
+  const resolutionOptions = MODEL_RESOLUTIONS[videoModel] || MODEL_RESOLUTIONS['animateDiff'];
+
+  // Calculate actual rendering resolution (use user-selected for wan21/svd/cogVideoX/hunyuan, auto for animateDiff)
   const resolution = useMemo(
-    () => getActualResolution(videoModel, currentProject?.resolution || '512x512', frameCount, generationType),
-    [videoModel, currentProject?.resolution, frameCount, generationType]
+    () => {
+      if (videoModel === 'wan21' || videoModel === 'svd' || videoModel === 'cogVideoX' || videoModel === 'hunyuan') {
+        return { width: genWidth, height: genHeight, scaled: false, originalWidth: genWidth, originalHeight: genHeight };
+      }
+      return getActualResolution(videoModel, currentProject?.resolution || '512x512', frameCount, generationType);
+    },
+    [videoModel, genWidth, genHeight, currentProject?.resolution, frameCount, generationType]
   );
 
   // Korean translation helper
@@ -459,6 +503,8 @@ export function ClipEditor() {
           videoModel: 'wan21',
           denoise: 0.7,
           hqEnhance: longVideoHqEnhance,
+          width: genWidth,
+          height: genHeight,
         }),
       });
 
@@ -613,6 +659,8 @@ export function ClipEditor() {
         referenceImage: generationType === 'imageToVideo' ? referenceImage || undefined : undefined,
         ipAdapterWeight: generationType === 'imageToVideo' ? ipAdapterWeight : undefined,
         denoise: generationType === 'imageToVideo' ? denoise : undefined,
+        width: genWidth,
+        height: genHeight,
       });
       setActiveJobId(result.jobId);
       setProgress(5);
@@ -738,22 +786,38 @@ export function ClipEditor() {
               </button>
             ))}
           </div>
-          {/* Actual rendering resolution info */}
-          <div className={`mt-2 px-3 py-2 rounded-lg text-xs ${resolution.scaled ? 'bg-amber-50 border border-amber-200' : 'bg-green-50 border border-green-200'}`}>
+          {/* Resolution selector */}
+          <div className="mt-2">
+            <label className="block text-xs font-medium text-gray-600 mb-1">해상도</label>
+            <div className="flex gap-1.5">
+              {resolutionOptions.map((r) => (
+                <button
+                  key={r.label}
+                  type="button"
+                  onClick={() => { setGenWidth(r.width); setGenHeight(r.height); }}
+                  className={`flex-1 py-1.5 text-xs rounded-lg border transition-colors ${
+                    genWidth === r.width && genHeight === r.height
+                      ? 'bg-green-600 text-white border-green-600'
+                      : 'bg-white text-gray-700 border-gray-200 hover:border-green-300'
+                  }`}
+                  title={r.desc}
+                >
+                  <div className="font-medium">{r.width}x{r.height}</div>
+                </button>
+              ))}
+            </div>
+          </div>
+          {/* Rendering resolution info */}
+          <div className="mt-1.5 px-3 py-1.5 rounded-lg text-xs bg-green-50 border border-green-200">
             <div className="flex items-center justify-between">
-              <span className={resolution.scaled ? 'text-amber-700 font-medium' : 'text-green-700 font-medium'}>
-                렌더링 해상도: {resolution.width}x{resolution.height}
+              <span className="text-green-700 font-medium">
+                {resolution.width}x{resolution.height}
               </span>
               <span className="text-gray-500">
                 {frameCount}프레임 / {videoModel === 'wan21' ? 16 : (currentProject?.frameRate || 8)}fps
                 {' '}= {(frameCount / (videoModel === 'wan21' ? 16 : (currentProject?.frameRate || 8))).toFixed(1)}초
               </span>
             </div>
-            {resolution.scaled && resolution.originalWidth !== resolution.width && (
-              <p className="text-amber-600 mt-1">
-                VRAM 제한으로 {resolution.originalWidth}x{resolution.originalHeight} → {resolution.width}x{resolution.height} 축소 적용
-              </p>
-            )}
           </div>
           {/* Model detail info */}
           {videoModel === 'wan21' && generationType === 'imageToVideo' && (
@@ -1001,201 +1065,117 @@ export function ClipEditor() {
           </div>
         </div>
 
-        {/* Long Video Section */}
-        <div className="border-t pt-4">
-          <button
-            type="button"
-            onClick={() => setShowLongVideo(!showLongVideo)}
-            className="w-full flex items-center justify-between px-3 py-2 bg-gradient-to-r from-indigo-50 to-purple-50 border border-indigo-200 rounded-lg hover:border-indigo-300 transition-colors"
-          >
-            <span className="text-sm font-medium text-indigo-800">Long Video (Multi-Segment)</span>
-            <svg className={`w-4 h-4 text-indigo-600 transition-transform ${showLongVideo ? 'rotate-180' : ''}`} fill="none" stroke="currentColor" viewBox="0 0 24 24">
-              <path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 9l-7 7-7-7" />
-            </svg>
-          </button>
-
-          {showLongVideo && (
-            <div className="mt-3 space-y-3 px-1">
-              {/* Duration selector */}
-              <div>
-                <label className="block text-sm font-medium text-gray-700 mb-1">
-                  Target Duration: {longVideoDuration}s
-                </label>
-                <div className="flex gap-2">
-                  {[30, 60, 90, 120].map((d) => (
-                    <button
-                      key={d}
-                      type="button"
-                      onClick={() => setLongVideoDuration(d)}
-                      className={`flex-1 py-1.5 text-sm rounded-lg border transition-colors ${
-                        longVideoDuration === d
-                          ? 'bg-indigo-600 text-white border-indigo-600'
-                          : 'bg-white text-gray-700 border-gray-200 hover:border-indigo-300'
-                      }`}
-                    >
-                      {d}s
-                    </button>
-                  ))}
-                </div>
-              </div>
-
-              {/* Segment info */}
-              <div className="px-3 py-2 bg-indigo-50 border border-indigo-200 rounded-lg text-xs">
-                <div className="flex justify-between text-indigo-700">
-                  <span className="font-medium">{longVideoSegments} segments x 5s = {(longVideoSegments * SECONDS_PER_SEGMENT).toFixed(0)}s</span>
-                  <span>~{longVideoEstimatedMinutes >= 60 ? `${(longVideoEstimatedMinutes / 60).toFixed(1)} hours` : `${longVideoEstimatedMinutes} min`}</span>
-                </div>
-                <p className="text-indigo-600 mt-1">
-                  Wan2.1: T2V 1.3B (seg 1) → I2V 14B (seg 2+) / 640x360 @ 16fps
-                </p>
-              </div>
-
-              {/* HQ Enhance toggle */}
-              <label className="flex items-center gap-2 cursor-pointer">
-                <input
-                  type="checkbox"
-                  checked={longVideoHqEnhance}
-                  onChange={(e) => setLongVideoHqEnhance(e.target.checked)}
-                  className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
-                />
-                <span className="text-sm text-gray-700">HQ Enhance (720p 30fps)</span>
-              </label>
-
-              {/* Long video progress */}
-              {isLongVideoGenerating && (() => {
-                const seg = longVideoSegment;
-                const completedSegs = longVideoSegTimestamps.length;
-                const totalSegs = seg?.total || longVideoSegments;
-
-                // Calculate ETA based on average segment time
-                let etaText = '';
-                if (longVideoStartTime && completedSegs > 0) {
-                  const elapsed = (Date.now() - longVideoStartTime) / 1000; // seconds
-                  const avgPerSeg = elapsed / completedSegs;
-                  const remaining = (totalSegs - completedSegs) * avgPerSeg;
-                  if (remaining > 3600) {
-                    etaText = `~${(remaining / 3600).toFixed(1)}h remaining`;
-                  } else if (remaining > 60) {
-                    etaText = `~${Math.round(remaining / 60)}m remaining`;
-                  } else {
-                    etaText = `~${Math.round(remaining)}s remaining`;
-                  }
-                } else if (longVideoStartTime) {
-                  const estTotal = totalSegs * 10 * 60; // ~10min per segment
-                  const elapsed = (Date.now() - longVideoStartTime) / 1000;
-                  const remaining = Math.max(0, estTotal - elapsed);
-                  etaText = `~${Math.round(remaining / 60)}m remaining (est.)`;
-                }
-
-                // Elapsed time
-                let elapsedText = '';
-                if (longVideoStartTime) {
-                  const elapsed = Math.floor((Date.now() - longVideoStartTime) / 1000);
-                  const mins = Math.floor(elapsed / 60);
-                  const secs = elapsed % 60;
-                  elapsedText = `${mins}:${String(secs).padStart(2, '0')} elapsed`;
-                }
-
-                return (
-                  <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg p-3 border border-indigo-200 space-y-2">
-                    {/* Header */}
-                    <div className="flex items-center justify-between">
-                      <div className="flex items-center gap-2">
-                        <div className="animate-spin rounded-full h-4 w-4 border-2 border-indigo-600 border-t-transparent"></div>
-                        <span className="font-medium text-indigo-800 text-sm">
-                          {seg ? `Segment ${seg.current}/${seg.total}` : 'Initializing...'}
-                        </span>
-                      </div>
-                      {etaText && (
-                        <span className="text-xs text-indigo-600 font-medium">{etaText}</span>
-                      )}
-                    </div>
-
-                    {/* Segment progress grid */}
-                    {seg && (
-                      <div className="flex gap-1">
-                        {Array.from({ length: totalSegs }, (_, i) => {
-                          const segNum = i + 1;
-                          const isCompleted = segNum <= completedSegs;
-                          const isCurrent = segNum === seg.current;
-                          return (
-                            <div
-                              key={i}
-                              className={`h-2 flex-1 rounded-full transition-all duration-500 ${
-                                isCompleted
-                                  ? 'bg-indigo-600'
-                                  : isCurrent
-                                    ? 'bg-indigo-400 animate-pulse'
-                                    : 'bg-indigo-200'
-                              }`}
-                              title={`Seg ${segNum}${isCompleted ? ' (done)' : isCurrent ? ' (generating)' : ''}`}
-                            />
-                          );
-                        })}
-                      </div>
-                    )}
-
-                    {/* Overall progress bar */}
-                    <div className="w-full bg-indigo-200 rounded-full h-2.5 overflow-hidden">
-                      <div
-                        className="bg-indigo-600 h-2.5 rounded-full transition-all duration-500"
-                        style={{ width: `${longVideoProgress}%` }}
-                      ></div>
-                    </div>
-
-                    {/* Status line */}
-                    <div className="flex justify-between text-xs">
-                      <span className="text-indigo-700">{longVideoMessage}</span>
-                      <div className="flex gap-3 text-indigo-600">
-                        {elapsedText && <span>{elapsedText}</span>}
-                        <span className="font-medium">{longVideoProgress}%</span>
-                      </div>
-                    </div>
-
-                    {/* Completed segments detail */}
-                    {completedSegs > 0 && (
-                      <div className="text-xs text-indigo-600">
-                        {completedSegs}/{totalSegs} segments done
-                        {completedSegs > 0 && longVideoStartTime && (() => {
-                          const avg = ((Date.now() - longVideoStartTime) / 1000 / completedSegs);
-                          return ` (avg ${Math.round(avg / 60)}m/seg)`;
-                        })()}
-                      </div>
-                    )}
-                  </div>
-                );
-              })()}
-
-              {/* Start / Cancel button */}
-              {isLongVideoGenerating ? (
-                <button
-                  type="button"
-                  onClick={handleCancelLongVideo}
-                  className="w-full py-2 bg-red-600 hover:bg-red-700 text-white text-sm font-medium rounded-lg transition-colors"
-                >
-                  Cancel Long Video
-                </button>
-              ) : (
-                <button
-                  type="button"
-                  onClick={handleLongVideoGenerate}
-                  disabled={!prompt.trim() || isGenerating}
-                  className="w-full py-2 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-sm font-medium rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
-                >
-                  Start Long Video ({longVideoSegments} segments)
-                </button>
-              )}
-            </div>
-          )}
-        </div>
-
       </div>
 
-      {/* Fixed bottom area - Progress & Button */}
-      <div className="p-4 border-t bg-white flex-shrink-0">
-        {/* Progress */}
+      {/* Fixed bottom area - Progress & Buttons */}
+      <div className="p-4 border-t bg-white flex-shrink-0 space-y-3">
+
+        {/* Long Video Progress (always visible when generating) */}
+        {isLongVideoGenerating && (() => {
+          const seg = longVideoSegment;
+          const completedSegs = longVideoSegTimestamps.length;
+          const totalSegs = seg?.total || longVideoSegments;
+
+          let etaText = '';
+          if (longVideoStartTime && completedSegs > 0) {
+            const elapsed = (Date.now() - longVideoStartTime) / 1000;
+            const avgPerSeg = elapsed / completedSegs;
+            const remaining = (totalSegs - completedSegs) * avgPerSeg;
+            if (remaining > 3600) {
+              etaText = `~${(remaining / 3600).toFixed(1)}h left`;
+            } else if (remaining > 60) {
+              etaText = `~${Math.round(remaining / 60)}m left`;
+            } else {
+              etaText = `~${Math.round(remaining)}s left`;
+            }
+          } else if (longVideoStartTime) {
+            const estTotal = totalSegs * 10 * 60;
+            const elapsed = (Date.now() - longVideoStartTime) / 1000;
+            const remaining = Math.max(0, estTotal - elapsed);
+            etaText = `~${Math.round(remaining / 60)}m left (est.)`;
+          }
+
+          let elapsedText = '';
+          if (longVideoStartTime) {
+            const elapsed = Math.floor((Date.now() - longVideoStartTime) / 1000);
+            const mins = Math.floor(elapsed / 60);
+            const secs = elapsed % 60;
+            elapsedText = `${mins}:${String(secs).padStart(2, '0')}`;
+          }
+
+          return (
+            <div className="bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg p-3 border border-indigo-200 space-y-2">
+              <div className="flex items-center justify-between">
+                <div className="flex items-center gap-2">
+                  <div className="animate-spin rounded-full h-4 w-4 border-2 border-indigo-600 border-t-transparent"></div>
+                  <span className="font-semibold text-indigo-800 text-sm">
+                    {seg ? `Long Video: Segment ${seg.current}/${seg.total}` : 'Long Video: Initializing...'}
+                  </span>
+                </div>
+                {etaText && <span className="text-xs text-indigo-600 font-medium">{etaText}</span>}
+              </div>
+
+              {/* Per-segment progress blocks */}
+              {seg && (
+                <div className="flex gap-1">
+                  {Array.from({ length: totalSegs }, (_, i) => {
+                    const segNum = i + 1;
+                    const isCompleted = segNum <= completedSegs;
+                    const isCurrent = segNum === seg.current;
+                    return (
+                      <div
+                        key={i}
+                        className={`h-3 flex-1 rounded transition-all duration-500 relative ${
+                          isCompleted
+                            ? 'bg-indigo-600'
+                            : isCurrent
+                              ? 'bg-indigo-400 animate-pulse'
+                              : 'bg-indigo-200'
+                        }`}
+                        title={`Seg ${segNum}${isCompleted ? ' (done)' : isCurrent ? ' (generating)' : ' (pending)'}`}
+                      >
+                        <span className="absolute inset-0 flex items-center justify-center text-[8px] font-bold text-white">
+                          {isCompleted ? '\u2713' : segNum}
+                        </span>
+                      </div>
+                    );
+                  })}
+                </div>
+              )}
+
+              {/* Overall progress bar */}
+              <div className="w-full bg-indigo-200 rounded-full h-2 overflow-hidden">
+                <div
+                  className="bg-indigo-600 h-2 rounded-full transition-all duration-500"
+                  style={{ width: `${longVideoProgress}%` }}
+                ></div>
+              </div>
+
+              <div className="flex justify-between text-xs">
+                <span className="text-indigo-700 truncate max-w-[60%]">{longVideoMessage}</span>
+                <div className="flex gap-2 text-indigo-600">
+                  {completedSegs > 0 && longVideoStartTime && (
+                    <span>{completedSegs}/{totalSegs} done (avg {Math.round((Date.now() - longVideoStartTime) / 1000 / completedSegs / 60)}m)</span>
+                  )}
+                  {elapsedText && <span>{elapsedText}</span>}
+                  <span className="font-medium">{longVideoProgress}%</span>
+                </div>
+              </div>
+
+              <button
+                type="button"
+                onClick={handleCancelLongVideo}
+                className="w-full py-1.5 bg-red-600 hover:bg-red-700 text-white text-xs font-medium rounded-lg transition-colors"
+              >
+                Cancel Long Video
+              </button>
+            </div>
+          );
+        })()}
+
+        {/* Single clip progress */}
         {isGenerating && (
-          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-4 border border-blue-200 shadow-sm mb-4">
+          <div className="bg-gradient-to-r from-blue-50 to-indigo-50 rounded-lg p-4 border border-blue-200 shadow-sm">
             <div className="flex items-center gap-3 mb-3">
               <div className="animate-spin rounded-full h-6 w-6 border-2 border-blue-600 border-t-transparent"></div>
               <span className="font-semibold text-blue-800 text-lg">Generating Video...</span>
@@ -1213,26 +1193,104 @@ export function ClipEditor() {
           </div>
         )}
 
-        {isGenerating ? (
-          <Button
-            type="button"
-            onClick={handleCancel}
-            className="w-full bg-red-600 hover:bg-red-700"
-            size="lg"
-          >
-            Cancel Generation
-          </Button>
-        ) : (
-          <Button
-            type="button"
-            onClick={handleGenerate}
-            className="w-full"
-            size="lg"
-            isLoading={generateClip.isPending}
-            disabled={!prompt.trim()}
-          >
-            Generate Clip
-          </Button>
+        {/* Action buttons */}
+        <div className="flex gap-2">
+          {/* Long Video button */}
+          {!isGenerating && !isLongVideoGenerating && (
+            <button
+              type="button"
+              onClick={() => setShowLongVideo(!showLongVideo)}
+              className={`px-3 py-2.5 rounded-lg text-sm font-medium transition-colors border ${
+                showLongVideo
+                  ? 'bg-indigo-600 text-white border-indigo-600'
+                  : 'bg-gradient-to-r from-indigo-50 to-purple-50 text-indigo-700 border-indigo-200 hover:border-indigo-400'
+              }`}
+            >
+              Long
+            </button>
+          )}
+
+          {isGenerating ? (
+            <Button
+              type="button"
+              onClick={handleCancel}
+              className="flex-1 bg-red-600 hover:bg-red-700"
+              size="lg"
+            >
+              Cancel Generation
+            </Button>
+          ) : isLongVideoGenerating ? (
+            <div className="flex-1" />
+          ) : (
+            <Button
+              type="button"
+              onClick={handleGenerate}
+              className="flex-1"
+              size="lg"
+              isLoading={generateClip.isPending}
+              disabled={!prompt.trim()}
+            >
+              Generate Clip
+            </Button>
+          )}
+        </div>
+
+        {/* Long Video settings panel (expandable) */}
+        {showLongVideo && !isLongVideoGenerating && !isGenerating && (
+          <div className="space-y-3 bg-gradient-to-r from-indigo-50 to-purple-50 rounded-lg p-3 border border-indigo-200">
+            {/* Duration selector */}
+            <div>
+              <label className="block text-xs font-medium text-gray-700 mb-1">
+                Target Duration
+              </label>
+              <div className="flex gap-1.5">
+                {[30, 60, 90, 120].map((d) => (
+                  <button
+                    key={d}
+                    type="button"
+                    onClick={() => setLongVideoDuration(d)}
+                    className={`flex-1 py-1.5 text-sm rounded-lg border transition-colors ${
+                      longVideoDuration === d
+                        ? 'bg-indigo-600 text-white border-indigo-600'
+                        : 'bg-white text-gray-700 border-gray-200 hover:border-indigo-300'
+                    }`}
+                  >
+                    {d}s
+                  </button>
+                ))}
+              </div>
+            </div>
+
+            {/* Segment info */}
+            <div className="px-2 py-1.5 bg-white/60 rounded text-xs">
+              <div className="flex justify-between text-indigo-700">
+                <span className="font-medium">{longVideoSegments} segments x 5s = {(longVideoSegments * SECONDS_PER_SEGMENT).toFixed(0)}s</span>
+                <span>~{longVideoEstimatedMinutes >= 60 ? `${(longVideoEstimatedMinutes / 60).toFixed(1)}h` : `${longVideoEstimatedMinutes}m`}</span>
+              </div>
+              <p className="text-indigo-500 mt-0.5">SD1.5 T2I → Wan2.1 I2V 14B (all segs) / {genWidth}x{genHeight} → {genWidth * 2}x{genHeight * 2}</p>
+            </div>
+
+            {/* HQ Enhance toggle */}
+            <label className="flex items-center gap-2 cursor-pointer">
+              <input
+                type="checkbox"
+                checked={longVideoHqEnhance}
+                onChange={(e) => setLongVideoHqEnhance(e.target.checked)}
+                className="rounded border-gray-300 text-indigo-600 focus:ring-indigo-500"
+              />
+              <span className="text-xs text-gray-700">HQ Enhance (720p 30fps)</span>
+            </label>
+
+            {/* Start button */}
+            <button
+              type="button"
+              onClick={handleLongVideoGenerate}
+              disabled={!prompt.trim()}
+              className="w-full py-2.5 bg-gradient-to-r from-indigo-600 to-purple-600 hover:from-indigo-700 hover:to-purple-700 text-white text-sm font-semibold rounded-lg transition-colors disabled:opacity-50 disabled:cursor-not-allowed"
+            >
+              Start Long Video ({longVideoSegments} segments, ~{longVideoEstimatedMinutes >= 60 ? `${(longVideoEstimatedMinutes / 60).toFixed(1)}h` : `${longVideoEstimatedMinutes}m`})
+            </button>
+          </div>
         )}
       </div>
     </div>
