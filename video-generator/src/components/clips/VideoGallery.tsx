@@ -308,7 +308,7 @@ export function VideoGallery() {
                         setResolutions((prev) => ({ ...prev, [clip.id]: `${v.videoWidth}x${v.videoHeight}` }));
                       }
                     }}
-                    onMouseEnter={(e) => e.currentTarget.play()}
+                    onMouseEnter={(e) => { e.currentTarget.play().catch(() => {}); }}
                     onMouseLeave={(e) => {
                       e.currentTarget.pause();
                       e.currentTarget.currentTime = 0;

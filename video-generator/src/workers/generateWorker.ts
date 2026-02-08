@@ -16,6 +16,7 @@ import {
   buildSVDWorkflow,
   buildWan21Workflow,
   buildWan21I2VWorkflow,
+  buildCogVideoXI2VWorkflow,
   parseResolution,
   getOutputVideoFromResult,
   MODEL_CONFIG,
@@ -195,6 +196,20 @@ async function processGenerateJob(job: Job<GenerateJobData>): Promise<void> {
         seed: clip.seedValue ? Number(clip.seedValue) : undefined,
         frameCount: (settings.frameCount as number) || 81,
         fps: clip.project.frameRate || 16,
+      });
+    } else if (videoModel === 'cogVideoX' && settings.generationType === 'imageToVideo' && clip.referenceImage) {
+      // CogVideoX 5B I2V (GGUF Q4_0 with sequential CPU offload for 12GB)
+      workflow = buildCogVideoXI2VWorkflow({
+        prompt: clip.prompt || '',
+        negativePrompt: clip.negativePrompt || undefined,
+        width: customWidth || 480,
+        height: customHeight || 320,
+        steps: clip.stepsCount || 20,
+        cfg: 6.0,
+        seed: clip.seedValue ? Number(clip.seedValue) : undefined,
+        frameCount: Math.min((settings.frameCount as number) || 49, 49),
+        fps: clip.project.frameRate || 8,
+        referenceImage: clip.referenceImage,
       });
     } else if (videoModel === 'svd' && clip.referenceImage) {
       // Stable Video Diffusion (Image to Video only)

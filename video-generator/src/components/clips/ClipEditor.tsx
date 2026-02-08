@@ -128,7 +128,7 @@ export function ClipEditor() {
       setCfgScale(2.5);
       setSteps(25);
     } else if (model === 'cogVideoX') {
-      if (frameCount > 32) setFrameCount(16);
+      setFrameCount(genType === 'imageToVideo' ? 49 : 16);
       setCfgScale(6.0);
       setSteps(20);
     } else if (model === 'hunyuan') {

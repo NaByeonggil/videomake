@@ -824,6 +824,162 @@ export function buildWan21I2VWorkflow(params: ImageToVideoParams): Record<string
 }
 
 /**
+ * Build CogVideoX 5B I2V workflow (GGUF Q4_0)
+ * Uses DownloadAndLoadCogVideoGGUFModel + CogVideoImageEncode + CogVideoSampler
+ * Requires enable_sequential_cpu_offload for 12GB VRAM
+ */
+export function buildCogVideoXI2VWorkflow(params: ImageToVideoParams): Record<string, unknown> {
+  resetNodeIds();
+
+  const {
+    prompt,
+    negativePrompt = '',
+    width = 480,
+    height = 320,
+    steps = 20,
+    cfg = 6.0,
+    seed = Math.floor(Math.random() * 2147483647),
+    frameCount = 49,
+    fps = 8,
+    referenceImage,
+  } = params;
+
+  const workflow: Record<string, unknown> = {};
+
+  // 1. DownloadAndLoadCogVideoGGUFModel (5B I2V GGUF Q4_0)
+  const modelLoaderId = getNodeId();
+  workflow[modelLoaderId] = {
+    class_type: 'DownloadAndLoadCogVideoGGUFModel',
+    inputs: {
+      model: 'CogVideoX_5b_I2V_GGUF_Q4_0.safetensors',
+      vae_precision: 'fp16',
+      fp8_fastmode: false,
+      load_device: 'main_device',
+      enable_sequential_cpu_offload: false,
+    },
+  };
+
+  // 2. CLIPLoader (T5-XXL fp8 for CogVideoX)
+  const clipLoaderId = getNodeId();
+  workflow[clipLoaderId] = {
+    class_type: 'CLIPLoader',
+    inputs: {
+      clip_name: 't5xxl_fp8_e4m3fn.safetensors',
+      type: 'sd3',
+    },
+  };
+
+  // 3. CogVideoTextEncode (Positive)
+  const positiveEncodeId = getNodeId();
+  workflow[positiveEncodeId] = {
+    class_type: 'CogVideoTextEncode',
+    inputs: {
+      clip: [clipLoaderId, 0],
+      prompt,
+      strength: 1.0,
+      force_offload: true,
+    },
+  };
+
+  // 4. CogVideoTextEncode (Negative)
+  const negativeEncodeId = getNodeId();
+  workflow[negativeEncodeId] = {
+    class_type: 'CogVideoTextEncode',
+    inputs: {
+      clip: [positiveEncodeId, 1],
+      prompt: negativePrompt,
+      strength: 1.0,
+      force_offload: true,
+    },
+  };
+
+  // 5. LoadImage (reference image)
+  const loadImageId = getNodeId();
+  workflow[loadImageId] = {
+    class_type: 'LoadImage',
+    inputs: {
+      image: referenceImage,
+    },
+  };
+
+  // 6. ImageScale (resize to generation resolution)
+  const imageScaleId = getNodeId();
+  workflow[imageScaleId] = {
+    class_type: 'ImageScale',
+    inputs: {
+      image: [loadImageId, 0],
+      upscale_method: 'lanczos',
+      width,
+      height,
+      crop: 'center',
+    },
+  };
+
+  // 7. CogVideoImageEncode (encode reference image to latents)
+  const imageEncodeId = getNodeId();
+  workflow[imageEncodeId] = {
+    class_type: 'CogVideoImageEncode',
+    inputs: {
+      vae: [modelLoaderId, 1],
+      start_image: [imageScaleId, 0],
+      enable_tiling: false,
+      noise_aug_strength: 0.0,
+    },
+  };
+
+  // 8. CogVideoSampler
+  const samplerId = getNodeId();
+  workflow[samplerId] = {
+    class_type: 'CogVideoSampler',
+    inputs: {
+      model: [modelLoaderId, 0],
+      positive: [positiveEncodeId, 0],
+      negative: [negativeEncodeId, 0],
+      image_cond_latents: [imageEncodeId, 0],
+      num_frames: frameCount,
+      steps,
+      cfg,
+      seed,
+      scheduler: 'CogVideoXDDIM',
+      denoise_strength: 1.0,
+    },
+  };
+
+  // 9. CogVideoDecode
+  const decodeId = getNodeId();
+  workflow[decodeId] = {
+    class_type: 'CogVideoDecode',
+    inputs: {
+      vae: [modelLoaderId, 1],
+      samples: [samplerId, 0],
+      enable_vae_tiling: true,
+      tile_sample_min_height: Math.floor(height / 2),
+      tile_sample_min_width: Math.floor(width / 2),
+      tile_overlap_factor_height: 0.2,
+      tile_overlap_factor_width: 0.2,
+      auto_tile_size: true,
+    },
+  };
+
+  // 10. VHS Video Combine
+  const videoCombineId = getNodeId();
+  workflow[videoCombineId] = {
+    class_type: 'VHS_VideoCombine',
+    inputs: {
+      images: [decodeId, 0],
+      frame_rate: fps,
+      loop_count: 0,
+      filename_prefix: 'CogVideoX_I2V',
+      format: 'video/h264-mp4',
+      pingpong: false,
+      save_output: true,
+    },
+  };
+
+  return workflow;
+}
+
+/**
  * Build SD 1.5 Text-to-Image workflow (single image generation)
  * Used to generate initial reference frame for I2V-only pipelines
  */
