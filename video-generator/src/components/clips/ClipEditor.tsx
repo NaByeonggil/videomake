@@ -216,7 +216,7 @@ export function ClipEditor() {
   // VRAM free state
   const { data: systemStatus } = useSystemStatus();
   const [isFreeing, setIsFreeing] = useState(false);
-  const [restartState, setRestartState] = useState<string | null>(null); // null | 'comfyui' | 'workers' | 'all-comfyui' | 'all-workers'
+  const [restartState, setRestartState] = useState<string | null>(null); // null | 'comfyui' | 'workers' | 'all-comfyui' | 'all-workers' | 'done-comfyui' | 'done-workers' | 'done-all' | 'failed'
 
   const handleFreeVram = async () => {
     setIsFreeing(true);
@@ -234,13 +234,9 @@ export function ClipEditor() {
     try {
       const res = await fetch('/api/system/restart-comfyui', { method: 'POST' });
       const json = await res.json();
-      if (!json.success) {
-        alert(`ComfyUI restart failed: ${json.error}`);
-      }
+      setRestartState(json.success ? 'done-comfyui' : 'failed');
     } catch {
-      alert('Failed to restart ComfyUI');
-    } finally {
-      setRestartState(null);
+      setRestartState('failed');
     }
   };
 
@@ -249,13 +245,9 @@ export function ClipEditor() {
     try {
       const res = await fetch('/api/system/restart-workers', { method: 'POST' });
       const json = await res.json();
-      if (!json.success) {
-        alert(`Workers restart failed: ${json.error}`);
-      }
+      setRestartState(json.success ? 'done-workers' : 'failed');
     } catch {
-      alert('Failed to restart workers');
-    } finally {
-      setRestartState(null);
+      setRestartState('failed');
     }
   };
 
@@ -266,21 +258,16 @@ export function ClipEditor() {
       const comfyRes = await fetch('/api/system/restart-comfyui', { method: 'POST' });
       const comfyJson = await comfyRes.json();
       if (!comfyJson.success) {
-        alert(`ComfyUI restart failed: ${comfyJson.error}`);
-        setRestartState(null);
+        setRestartState('failed');
         return;
       }
 
       setRestartState('all-workers');
       const workerRes = await fetch('/api/system/restart-workers', { method: 'POST' });
       const workerJson = await workerRes.json();
-      if (!workerJson.success) {
-        alert(`Workers restart failed: ${workerJson.error}`);
-      }
+      setRestartState(workerJson.success ? 'done-all' : 'failed');
     } catch {
-      alert('Failed to restart');
-    } finally {
-      setRestartState(null);
+      setRestartState('failed');
     }
   };
 
@@ -767,26 +754,44 @@ export function ClipEditor() {
                   <button
                     type="button"
                     onClick={handleRestartComfyUI}
-                    disabled={!!restartState}
-                    className="px-2 py-0.5 text-xs bg-gray-100 hover:bg-blue-100 text-gray-600 hover:text-blue-700 rounded border border-gray-200 hover:border-blue-300 transition-colors disabled:opacity-50"
+                    disabled={!!restartState && restartState !== 'done-comfyui'}
+                    className={`px-2 py-0.5 text-xs rounded border transition-colors disabled:opacity-50 ${
+                      restartState === 'done-comfyui'
+                        ? 'bg-green-100 text-green-700 border-green-300'
+                        : 'bg-gray-100 hover:bg-blue-100 text-gray-600 hover:text-blue-700 border-gray-200 hover:border-blue-300'
+                    }`}
                   >
-                    {restartState === 'comfyui' ? '...' : 'ComfyUI'}
+                    {restartState === 'comfyui' ? 'Restarting...' : restartState === 'done-comfyui' ? 'ComfyUI Done' : 'ComfyUI'}
                   </button>
                   <button
                     type="button"
                     onClick={handleRestartWorkers}
-                    disabled={!!restartState}
-                    className="px-2 py-0.5 text-xs bg-gray-100 hover:bg-orange-100 text-gray-600 hover:text-orange-700 rounded border border-gray-200 hover:border-orange-300 transition-colors disabled:opacity-50"
+                    disabled={!!restartState && restartState !== 'done-workers'}
+                    className={`px-2 py-0.5 text-xs rounded border transition-colors disabled:opacity-50 ${
+                      restartState === 'done-workers'
+                        ? 'bg-green-100 text-green-700 border-green-300'
+                        : 'bg-gray-100 hover:bg-orange-100 text-gray-600 hover:text-orange-700 border-gray-200 hover:border-orange-300'
+                    }`}
                   >
-                    {restartState === 'workers' ? '...' : 'Workers'}
+                    {restartState === 'workers' ? 'Restarting...' : restartState === 'done-workers' ? 'Workers Done' : 'Workers'}
                   </button>
                   <button
                     type="button"
                     onClick={handleRestartAll}
-                    disabled={!!restartState}
-                    className="px-2 py-0.5 text-xs bg-gray-100 hover:bg-green-100 text-gray-600 hover:text-green-700 rounded border border-gray-200 hover:border-green-300 transition-colors disabled:opacity-50"
+                    disabled={!!restartState && !restartState.startsWith('done') && restartState !== 'failed'}
+                    className={`px-2 py-0.5 text-xs rounded border transition-colors disabled:opacity-50 ${
+                      restartState === 'done-all'
+                        ? 'bg-green-100 text-green-700 border-green-300'
+                        : restartState === 'failed'
+                          ? 'bg-red-100 text-red-700 border-red-300'
+                          : 'bg-gray-100 hover:bg-green-100 text-gray-600 hover:text-green-700 border-gray-200 hover:border-green-300'
+                    }`}
                   >
-                    {restartState?.startsWith('all') ? (restartState === 'all-comfyui' ? 'ComfyUI...' : 'Workers...') : 'Restart All'}
+                    {restartState === 'all-comfyui' ? 'ComfyUI...'
+                      : restartState === 'all-workers' ? 'Workers...'
+                      : restartState === 'done-all' ? 'All Done'
+                      : restartState === 'failed' ? 'Failed'
+                      : 'Restart All'}
                   </button>
                 </div>
               </div>
@@ -796,6 +801,25 @@ export function ClipEditor() {
                   style={{ width: `${pct}%` }}
                 />
               </div>
+              {/* Restart status banner */}
+              {restartState && (
+                <div className={`mt-1.5 px-3 py-2 rounded-lg text-sm font-medium text-center transition-all ${
+                  restartState === 'done-comfyui' || restartState === 'done-workers' || restartState === 'done-all'
+                    ? 'bg-green-100 text-green-800 border border-green-300'
+                    : restartState === 'failed'
+                      ? 'bg-red-100 text-red-800 border border-red-300'
+                      : 'bg-yellow-50 text-yellow-800 border border-yellow-300'
+                }`}>
+                  {restartState === 'comfyui' && 'ComfyUI 재시작 중... (최대 3분 소요)'}
+                  {restartState === 'workers' && 'Workers 재시작 중...'}
+                  {restartState === 'all-comfyui' && 'Restart All: ComfyUI 재시작 중... (최대 3분 소요)'}
+                  {restartState === 'all-workers' && 'Restart All: ComfyUI 완료 → Workers 재시작 중...'}
+                  {restartState === 'done-comfyui' && 'ComfyUI 재시작 완료!'}
+                  {restartState === 'done-workers' && 'Workers 재시작 완료!'}
+                  {restartState === 'done-all' && 'ComfyUI + Workers 모두 재시작 완료!'}
+                  {restartState === 'failed' && '재시작 실패!'}
+                </div>
+              )}
             </div>
           );
         })()}
@@ -916,19 +940,21 @@ export function ClipEditor() {
           )}
         </div>
 
+        {/* Hidden file input - always mounted to prevent ref issues */}
+        <input
+          ref={fileInputRef}
+          type="file"
+          accept="image/png,image/jpeg,image/webp"
+          onChange={handleImageUpload}
+          className="hidden"
+        />
+
         {/* Reference Image Upload (for Image to Video) */}
         {generationType === 'imageToVideo' && (
           <div>
             <label className="block text-sm font-medium text-gray-700 mb-2">
               Reference Image
             </label>
-            <input
-              ref={fileInputRef}
-              type="file"
-              accept="image/png,image/jpeg,image/jpg,image/webp"
-              onChange={handleImageUpload}
-              className="hidden"
-            />
 
             {imagePreview ? (
               <div className="relative">
